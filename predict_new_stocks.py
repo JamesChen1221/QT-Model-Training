@@ -87,43 +87,43 @@ def preprocess_new_data(data, feature_columns, use_advanced=False):
     return df
 
 
-def predict_stocks(input_file, model_path='models/qt_xgboost_model.pkl', 
+def predict_stocks(input_file, model_dir='models/', 
                    output_file='data/new_predictions.csv', use_advanced=False):
     """
-    預測新股票的當沖潛力
+    使用所有訓練好的模型預測新股票的當沖潛力
     
     參數:
     - input_file: 輸入檔案路徑（Excel 或 CSV）
-    - model_path: 模型檔案路徑
+    - model_dir: 模型資料夾路徑
     - output_file: 輸出檔案路徑
     - use_advanced: 是否使用進階模型
     """
     print("=" * 60)
-    print("QT 當沖潛力預測系統")
+    print("QT 當沖潛力預測系統 - 多目標預測")
     print("=" * 60)
     
-    # 1. 載入模型
+    # 1. 尋找所有模型檔案
     print(f"\n步驟 1: 載入模型")
-    print(f"模型路徑: {model_path}")
+    model_files = list(Path(model_dir).glob('qt_model_*.pkl'))
     
-    if not Path(model_path).exists():
-        print(f"❌ 錯誤: 找不到模型檔案 {model_path}")
+    if not model_files:
+        print(f"❌ 錯誤: 在 {model_dir} 中找不到模型檔案")
         print(f"\n請先訓練模型:")
-        if use_advanced:
-            print(f"  python train_qt_advanced.py")
-        else:
-            print(f"  python train_qt_xgboost.py")
+        print(f"  python train_qt_xgboost.py")
         return None
     
-    model_data = joblib.load(model_path)
-    model = model_data['model']
-    scaler = model_data['scaler']
-    feature_columns = model_data['feature_columns']
-    target_column = model_data['target_column']
+    print(f"✓ 找到 {len(model_files)} 個模型:")
     
-    print(f"✓ 模型載入成功")
-    print(f"✓ 預測目標: {target_column}")
-    print(f"✓ 需要的特徵數: {len(feature_columns)}")
+    models_data = []
+    for model_file in sorted(model_files):
+        model_data = joblib.load(model_file)
+        target_col = model_data['target_column']
+        models_data.append({
+            'path': model_file,
+            'data': model_data,
+            'target': target_col
+        })
+        print(f"  • {target_col:30s} ← {model_file.name}")
     
     # 2. 載入新資料
     print(f"\n步驟 2: 載入新資料")
@@ -145,82 +145,84 @@ def predict_stocks(input_file, model_path='models/qt_xgboost_model.pkl',
     print(f"✓ 載入資料: {len(data)} 筆記錄")
     print(f"✓ 欄位數: {len(data.columns)}")
     
-    # 顯示欄位
-    print(f"\n資料欄位:")
-    for i, col in enumerate(data.columns, 1):
-        print(f"  {i}. {col}")
-    
-    # 3. 預處理資料
-    print(f"\n步驟 3: 預處理資料")
-    processed_data = preprocess_new_data(data, feature_columns, use_advanced)
-    
-    # 4. 標準化
-    print(f"\n步驟 4: 標準化特徵")
-    X = processed_data.values
-    X_scaled = scaler.transform(X)
-    print(f"✓ 標準化完成")
-    
-    # 5. 預測
-    print(f"\n步驟 5: 進行預測")
-    predictions = model.predict(X_scaled)
-    print(f"✓ 預測完成")
-    
-    # 6. 整理結果
-    print(f"\n步驟 6: 整理結果")
-    
-    # 將預測結果加入原始資料
+    # 3. 對每個模型進行預測
     result = data.copy()
-    result[f'預測_{target_column}'] = predictions
     
-    # 如果原始資料有目標欄位，計算誤差
-    if target_column in result.columns:
-        result['預測誤差'] = np.abs(result[target_column] - predictions)
-        print(f"✓ 原始資料包含目標欄位，已計算預測誤差")
+    for i, model_info in enumerate(models_data, 1):
+        print(f"\n步驟 {i+2}: 預測 {model_info['target']}")
+        print("-" * 60)
+        
+        model_data = model_info['data']
+        model = model_data['model']
+        scaler = model_data['scaler']
+        feature_columns = model_data['feature_columns']
+        target_column = model_info['target']  # 從 model_info 取得，不是從 model_data
+        
+        # 預處理資料
+        processed_data = preprocess_new_data(data, feature_columns, use_advanced)
+        
+        # 標準化
+        X = processed_data.values
+        X_scaled = scaler.transform(X)
+        
+        # 預測
+        predictions = model.predict(X_scaled)
+        
+        # 將預測結果加入
+        result[f'預測_{target_column}'] = predictions
+        
+        print(f"✓ 預測完成")
+        
+        # 如果原始資料有目標欄位，計算誤差
+        if target_column in result.columns:
+            result[f'誤差_{target_column}'] = np.abs(result[target_column] - predictions)
     
-    # 按預測值排序
-    result = result.sort_values(f'預測_{target_column}', ascending=False)
-    
-    # 7. 顯示結果
+    # 4. 整理並顯示結果
     print(f"\n" + "=" * 60)
-    print("預測結果（按預測值排序）")
+    print("預測結果總覽")
     print("=" * 60)
     
     # 選擇要顯示的欄位
     display_cols = ['開盤日期', '公司代碼']
     if '產業' in result.columns:
         display_cols.append('產業')
-    display_cols.append(f'預測_{target_column}')
-    if target_column in result.columns:
-        display_cols.extend([target_column, '預測誤差'])
+    
+    # 加入所有預測欄位
+    for model_info in models_data:
+        target_col = model_info['target']
+        display_cols.append(f'預測_{target_col}')
     
     # 確保欄位存在
     display_cols = [col for col in display_cols if col in result.columns]
     
     print("\n" + result[display_cols].to_string(index=False))
     
-    # 8. 儲存結果
-    print(f"\n步驟 7: 儲存結果")
+    # 5. 儲存結果
+    print(f"\n步驟 {len(models_data)+3}: 儲存結果")
     Path(output_file).parent.mkdir(parents=True, exist_ok=True)
     result.to_csv(output_file, index=False, encoding='utf-8-sig')
     print(f"✓ 結果已儲存至: {output_file}")
     
-    # 9. 統計摘要
+    # 6. 統計摘要
     print(f"\n" + "=" * 60)
     print("預測統計摘要")
     print("=" * 60)
-    print(f"預測筆數: {len(predictions)}")
-    print(f"預測平均值: {predictions.mean():.2f}%")
-    print(f"預測標準差: {predictions.std():.2f}%")
-    print(f"預測最大值: {predictions.max():.2f}%")
-    print(f"預測最小值: {predictions.min():.2f}%")
+    print(f"預測筆數: {len(result)}")
     
-    if target_column in result.columns:
-        errors = result['預測誤差']
-        print(f"\n預測誤差統計:")
-        print(f"平均絕對誤差: {errors.mean():.2f}%")
-        print(f"誤差標準差: {errors.std():.2f}%")
-        print(f"最大誤差: {errors.max():.2f}%")
-        print(f"最小誤差: {errors.min():.2f}%")
+    for model_info in models_data:
+        target_col = model_info['target']
+        pred_col = f'預測_{target_col}'
+        predictions = result[pred_col]
+        
+        print(f"\n{target_col}:")
+        print(f"  平均值: {predictions.mean():>8.2f}%")
+        print(f"  標準差: {predictions.std():>8.2f}%")
+        print(f"  最大值: {predictions.max():>8.2f}%")
+        print(f"  最小值: {predictions.min():>8.2f}%")
+        
+        if target_col in result.columns:
+            errors = result[f'誤差_{target_col}']
+            print(f"  平均誤差: {errors.mean():>6.2f}%")
     
     print(f"\n" + "=" * 60)
     print("✓ 預測完成！")
@@ -234,36 +236,40 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(
-        description='使用訓練好的模型預測股票當沖潛力',
+        description='使用訓練好的模型預測股票當沖潛力（多目標預測）',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 使用範例:
 
-1. 預測新資料（使用基礎模型）:
-   python predict_new_stocks.py --input data/new_stocks.xlsx
+1. 預測新資料（自動使用所有模型）:
+   python predict_new_stocks.py --input data/Stock TBP.xlsx
 
-2. 預測新資料（使用進階模型）:
-   python predict_new_stocks.py --input data/new_stocks.xlsx --advanced
+2. 指定輸出檔案:
+   python predict_new_stocks.py --input data/Stock TBP.xlsx --output results/predictions.csv
 
-3. 指定輸出檔案:
-   python predict_new_stocks.py --input data/new_stocks.xlsx --output results/predictions.csv
-
-4. 使用自訓練的模型:
-   python predict_new_stocks.py --input data/new_stocks.xlsx --model models/my_model.pkl
+3. 指定模型資料夾:
+   python predict_new_stocks.py --input data/Stock TBP.xlsx --model-dir models/
 
 輸入資料格式:
 - 必須包含所有訓練時使用的特徵欄位
 - 不需要包含目標標籤（帶 # 的欄位）
 - 支援 Excel (.xlsx) 和 CSV (.csv) 格式
+
+輸出結果:
+- 會包含所有 4 個目標的預測值
+- #開盤 (%)
+- #10分鐘低價 (%)
+- #1.5小時高價 (%)
+- #最高價前的最低價 (%)
         """
     )
     
     parser.add_argument('--input', '-i', type=str, 
                        default='data/Stock TBP.xlsx',
                        help='輸入資料檔案路徑')
-    parser.add_argument('--model', '-m', type=str,
-                       default='models/qt_xgboost_model.pkl',
-                       help='模型檔案路徑')
+    parser.add_argument('--model-dir', '-m', type=str,
+                       default='models/',
+                       help='模型資料夾路徑')
     parser.add_argument('--output', '-o', type=str,
                        default='data/new_predictions.csv',
                        help='輸出結果檔案路徑')
@@ -272,14 +278,10 @@ def main():
     
     args = parser.parse_args()
     
-    # 如果使用進階模型，自動調整模型路徑
-    if args.advanced and args.model == 'models/qt_xgboost_model.pkl':
-        args.model = 'models/qt_advanced_model.pkl'
-    
     # 執行預測
     result = predict_stocks(
         input_file=args.input,
-        model_path=args.model,
+        model_dir=args.model_dir,
         output_file=args.output,
         use_advanced=args.advanced
     )
@@ -288,7 +290,7 @@ def main():
         print(f"\n提示:")
         print(f"- 查看完整結果: {args.output}")
         print(f"- 預測值越高，當沖潛力越大")
-        print(f"- 建議關注預測值前 10 名的股票")
+        print(f"- 建議關注各項預測值較高的股票")
 
 
 if __name__ == "__main__":

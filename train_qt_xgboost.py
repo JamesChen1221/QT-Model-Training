@@ -66,7 +66,7 @@ class QTModelTrainer:
         
         print(f"✓ 特徵欄位數: {len(self.feature_columns)}")
         print(f"✓ 目標欄位數: {len(self.target_columns)}")
-        print(f"\n目標變數: {self.target_columns[0]}")
+        print(f"\n目標變數: {', '.join(self.target_columns)}")
         
         # 處理產業欄位（One-Hot Encoding）
         if '產業' in self.data.columns:
@@ -107,14 +107,14 @@ class QTModelTrainer:
         
         return self
     
-    def split_data(self, test_size=0.2, random_state=42):
+    def split_data(self, target_column, test_size=0.2, random_state=42):
         """分割訓練集和測試集"""
         print("\n" + "=" * 60)
-        print("步驟 3: 分割訓練集和測試集")
+        print(f"步驟 3: 分割訓練集和測試集 - {target_column}")
         print("=" * 60)
         
         X = self.data[self.feature_columns].values
-        y = self.data[self.target_columns[0]].values
+        y = self.data[target_column].values
         
         # 分割資料
         self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(
@@ -283,10 +283,10 @@ class QTModelTrainer:
         
         return self
     
-    def save_model(self, model_path='models/qt_xgboost_model.pkl'):
+    def save_model(self, target_column, model_path='models/qt_xgboost_model.pkl'):
         """儲存模型"""
         print("\n" + "=" * 60)
-        print("步驟 7: 儲存模型")
+        print(f"步驟 7: 儲存模型 - {target_column}")
         print("=" * 60)
         
         Path(model_path).parent.mkdir(parents=True, exist_ok=True)
@@ -296,7 +296,7 @@ class QTModelTrainer:
             'model': self.model,
             'scaler': self.scaler,
             'feature_columns': self.feature_columns,
-            'target_column': self.target_columns[0],
+            'target_column': target_column,
             'feature_importance': self.feature_importance
         }, model_path)
         
@@ -305,25 +305,57 @@ class QTModelTrainer:
         return self
 
 
-def main():
-    """主程式"""
-    trainer = QTModelTrainer()
+def train_single_target(trainer, target_column, model_index):
+    """訓練單一目標的模型"""
+    print("\n" + "╔" + "=" * 58 + "╗")
+    print(f"║  模型 {model_index}/4: {target_column}" + " " * (58 - len(f"  模型 {model_index}/4: {target_column}")) + "║")
+    print("╚" + "=" * 58 + "╝")
     
-    # 執行完整訓練流程
-    trainer.load_data('data/QT Training Data.xlsx')\
-           .preprocess_data()\
-           .split_data(test_size=0.2, random_state=42)\
+    # 生成模型檔案名稱
+    safe_name = target_column.replace('#', '').replace(' ', '_').replace('(', '').replace(')', '').replace('%', 'pct')
+    model_path = f'models/qt_model_{safe_name}.pkl'
+    plot_path = f'models/training_results_{safe_name}.png'
+    
+    # 執行訓練流程
+    trainer.split_data(target_column=target_column, test_size=0.2, random_state=42)\
            .build_and_train_model(n_estimators=100, max_depth=5, learning_rate=0.1)\
            .evaluate_model()\
-           .plot_results()\
-           .save_model()
+           .plot_results(save_path=plot_path)\
+           .save_model(target_column=target_column, model_path=model_path)
     
-    print("\n" + "=" * 60)
-    print("✓ 所有步驟完成！")
-    print("=" * 60)
+    return model_path
+
+
+def main():
+    """主程式 - 訓練所有目標的模型"""
+    print("\n" + "╔" + "=" * 58 + "╗")
+    print("║" + " " * 10 + "QT 當沖潛力預測 - 多目標訓練系統" + " " * 12 + "║")
+    print("╚" + "=" * 58 + "╝")
+    
+    # 初始化訓練器
+    trainer = QTModelTrainer()
+    
+    # 載入資料並預處理（只需要做一次）
+    trainer.load_data('data/QT Training Data.xlsx')\
+           .preprocess_data()
+    
+    # 訓練每個目標
+    trained_models = []
+    for i, target_col in enumerate(trainer.target_columns, 1):
+        model_path = train_single_target(trainer, target_col, i)
+        trained_models.append((target_col, model_path))
+    
+    # 總結
+    print("\n" + "╔" + "=" * 58 + "╗")
+    print("║" + " " * 20 + "訓練完成總結" + " " * 22 + "║")
+    print("╚" + "=" * 58 + "╝")
+    print(f"\n✓ 成功訓練 {len(trained_models)} 個模型:")
+    for target_col, model_path in trained_models:
+        print(f"  • {target_col:30s} → {model_path}")
+    
     print("\n下一步:")
-    print("1. 查看結果圖表: models/training_results.png")
-    print("2. 使用模型預測: python predict_qt_xgboost.py")
+    print("1. 查看結果圖表: models/training_results_*.png")
+    print("2. 使用模型預測: python predict_new_stocks.py")
     print("3. 收集更多資料以提升準確度")
     print()
 
