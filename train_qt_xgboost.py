@@ -263,11 +263,29 @@ class QTModelTrainer:
             print(f"\n✓ 產業欄位已轉換為 One-Hot Encoding ({len(industry_dummies.columns)} 個類別)")
         
         # 處理缺失值
+        # 特殊處理: 觸發類型 2 (消息面) 的財報欄位應該填 0，不是中位數
+        financial_cols = ['EPS Surprise (%)', 'Revenue Surprise (%)', '展望 (Guidance)']
+        
+        if '觸發類型' in self.data.columns:
+            for col in financial_cols:
+                if col in self.feature_columns:
+                    # 觸發類型 2 的財報欄位填 0
+                    mask_type2 = self.data['觸發類型'] == 2
+                    self.data.loc[mask_type2, col] = self.data.loc[mask_type2, col].fillna(0)
+                    
+                    # 其他類型用中位數填補
+                    mask_other = self.data['觸發類型'] != 2
+                    median_val = self.data.loc[mask_other, col].median()
+                    if pd.isna(median_val):
+                        median_val = 0
+                    self.data.loc[mask_other, col] = self.data.loc[mask_other, col].fillna(median_val)
+        
+        # 處理其他欄位的缺失值
         missing = self.data[self.feature_columns].isnull().sum().sum()
         if missing > 0:
             print(f"✓ 發現 {missing} 個缺失值，使用中位數填補")
             for col in self.feature_columns:
-                if self.data[col].isnull().any():
+                if col not in financial_cols and self.data[col].isnull().any():
                     median_val = self.data[col].median()
                     if pd.isna(median_val):
                         median_val = 0

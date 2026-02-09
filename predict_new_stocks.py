@@ -191,8 +191,29 @@ def preprocess_new_data(data, feature_columns, use_advanced=False):
             df[feat] = 0
     
     # 4. 填補缺失值
+    # 特殊處理: 觸發類型 2 (消息面) 的財報欄位應該填 0
+    financial_cols = ['EPS Surprise (%)', 'Revenue Surprise (%)', '展望 (Guidance)']
+    
+    if '觸發類型' in df.columns:
+        for col in financial_cols:
+            if col in feature_columns and col in df.columns:
+                # 觸發類型 2 的財報欄位填 0
+                mask_type2 = df['觸發類型'] == 2
+                if mask_type2.any():
+                    df.loc[mask_type2, col] = df.loc[mask_type2, col].fillna(0)
+                    print(f"✓ 觸發類型 2 的 {col} 填 0")
+                
+                # 其他類型用中位數填補
+                mask_other = df['觸發類型'] != 2
+                if mask_other.any():
+                    median_val = df.loc[mask_other, col].median()
+                    if pd.isna(median_val):
+                        median_val = 0
+                    df.loc[mask_other, col] = df.loc[mask_other, col].fillna(median_val)
+    
+    # 處理其他欄位的缺失值
     for col in feature_columns:
-        if col in df.columns and df[col].isnull().any():
+        if col not in financial_cols and col in df.columns and df[col].isnull().any():
             median_val = df[col].median()
             if pd.isna(median_val):
                 median_val = 0
