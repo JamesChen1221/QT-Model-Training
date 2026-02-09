@@ -87,7 +87,7 @@ def extract_trend_features_from_120d(price_sequence_120d):
     price_sequence_120d: 120天收盤價序列 (絕對價格，例如 [100, 102, 101, ...])
     
     返回:
-    dict: 15個斜率特徵
+    dict: 15個斜率特徵 (已乘以100，單位為 %/天)
     """
     # 解析序列
     if pd.isna(price_sequence_120d):
@@ -120,16 +120,18 @@ def extract_trend_features_from_120d(price_sequence_120d):
         else:
             normalized = price_segment
         
-        return extract_overlapping_slopes(normalized, num_segments=5)
+        # 提取斜率並乘以100，轉換為 %/天
+        slopes = extract_overlapping_slopes(normalized, num_segments=5)
+        return [s * 100 for s in slopes]  # 乘以100
     
     # 1. 120天切5段 (使用全部120天)
     slopes_120d = normalize_and_extract(prices_array)
     
-    # 2. 60天切5段 (使用最近61天)
-    if len(prices) >= 61:
-        slopes_60d = normalize_and_extract(prices_array[-61:])
+    # 2. 20天切5段 (使用最近21天)
+    if len(prices) >= 21:
+        slopes_20d = normalize_and_extract(prices_array[-21:])
     else:
-        slopes_60d = [0] * 5
+        slopes_20d = [0] * 5
     
     # 3. 5天切5段 (使用最近6天)
     if len(prices) >= 6:
@@ -143,11 +145,11 @@ def extract_trend_features_from_120d(price_sequence_120d):
         '120d_seg3_slope': slopes_120d[2],
         '120d_seg4_slope': slopes_120d[3],
         '120d_seg5_slope': slopes_120d[4],
-        '60d_seg1_slope': slopes_60d[0],
-        '60d_seg2_slope': slopes_60d[1],
-        '60d_seg3_slope': slopes_60d[2],
-        '60d_seg4_slope': slopes_60d[3],
-        '60d_seg5_slope': slopes_60d[4],
+        '20d_seg1_slope': slopes_20d[0],
+        '20d_seg2_slope': slopes_20d[1],
+        '20d_seg3_slope': slopes_20d[2],
+        '20d_seg4_slope': slopes_20d[3],
+        '20d_seg5_slope': slopes_20d[4],
         '5d_seg1_slope': slopes_5d[0],
         '5d_seg2_slope': slopes_5d[1],
         '5d_seg3_slope': slopes_5d[2],
@@ -198,11 +200,12 @@ class QTModelTrainer:
         self.target_columns = [col for col in self.data.columns if col.startswith('#')]
         exclude_cols = ['開盤日期', '公司代碼'] + self.target_columns
         
-        # 先不包含任何序列欄位
+        # 先不包含任何序列欄位和無效欄位
         self.feature_columns = [col for col in self.data.columns 
                                if col not in exclude_cols 
                                and '序列' not in col
-                               and not col.startswith('Unnamed')]
+                               and not col.startswith('Unnamed')
+                               and col != '備註']  # 排除備註欄位
         
         print(f"✓ 原始特徵欄位數: {len(self.feature_columns)}")
         print(f"✓ 目標欄位數: {len(self.target_columns)}")
@@ -228,15 +231,15 @@ class QTModelTrainer:
                 # 顯示提取的特徵
                 print("  120天 5段斜率:")
                 for i in range(1, 6):
-                    print(f"    段{i}: {slope_features[f'120d_seg{i}_slope']:>8.4f}")
+                    print(f"    段{i}: {slope_features[f'120d_seg{i}_slope']:>8.4f} %/天")
                 
-                print("  60天 5段斜率:")
+                print("  20天 5段斜率:")
                 for i in range(1, 6):
-                    print(f"    段{i}: {slope_features[f'60d_seg{i}_slope']:>8.4f}")
+                    print(f"    段{i}: {slope_features[f'20d_seg{i}_slope']:>8.4f} %/天")
                 
                 print("  5天 5段斜率:")
                 for i in range(1, 6):
-                    print(f"    段{i}: {slope_features[f'5d_seg{i}_slope']:>8.4f}")
+                    print(f"    段{i}: {slope_features[f'5d_seg{i}_slope']:>8.4f} %/天")
             
             # 將斜率特徵加入資料
             slope_df = pd.DataFrame(slope_features_list)

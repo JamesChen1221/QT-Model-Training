@@ -10,6 +10,125 @@ import sys
 from pathlib import Path
 
 
+def calculate_trend_slope(prices):
+    """
+    計算趨勢線斜率（線性回歸）
+    
+    參數:
+    prices: 價格序列（已標準化）
+    
+    返回:
+    slope: 趨勢線斜率
+    """
+    if len(prices) < 2:
+        return 0
+    x = np.arange(len(prices))
+    y = prices
+    slope, _ = np.polyfit(x, y, 1)
+    return slope
+
+
+def extract_overlapping_slopes(prices, num_segments=5):
+    """
+    用重疊窗口提取趨勢斜率
+    
+    參數:
+    prices: 價格序列（已標準化）
+    num_segments: 要切成幾段
+    
+    返回:
+    list: 每段的趨勢斜率
+    """
+    prices = np.array(prices)
+    n = len(prices)
+    
+    if n < num_segments + 1:
+        return [0] * num_segments
+    
+    segment_span = (n - 1) / num_segments
+    slopes = []
+    
+    for i in range(num_segments):
+        start_idx = int(i * segment_span)
+        end_idx = int((i + 1) * segment_span)
+        segment = prices[start_idx:end_idx + 1]
+        slope = calculate_trend_slope(segment)
+        slopes.append(round(slope, 6))
+    
+    return slopes
+
+
+def extract_trend_features_from_120d(price_sequence_120d):
+    """
+    從120天收盤價序列提取15個趨勢斜率特徵
+    
+    參數:
+    price_sequence_120d: 120天收盤價序列
+    
+    返回:
+    dict: 15個斜率特徵 (單位為 %/天)
+    """
+    if pd.isna(price_sequence_120d):
+        return {f'slope_{i}': 0 for i in range(1, 16)}
+    
+    if isinstance(price_sequence_120d, str):
+        s = price_sequence_120d.strip('[]').strip()
+        prices = [float(v.strip()) for v in s.split(',') if v.strip()]
+    else:
+        prices = list(price_sequence_120d)
+    
+    if len(prices) < 120:
+        return {f'slope_{i}': 0 for i in range(1, 16)}
+    
+    prices_array = np.array(prices)
+    
+    def normalize_and_extract(price_segment):
+        """標準化並提取斜率"""
+        if len(price_segment) < 2:
+            return [0] * 5
+        
+        if price_segment[0] != 0:
+            normalized = price_segment / price_segment[0]
+        else:
+            normalized = price_segment
+        
+        slopes = extract_overlapping_slopes(normalized, num_segments=5)
+        return [s * 100 for s in slopes]  # 乘以100
+    
+    # 1. 120天切5段
+    slopes_120d = normalize_and_extract(prices_array)
+    
+    # 2. 20天切5段
+    if len(prices) >= 21:
+        slopes_20d = normalize_and_extract(prices_array[-21:])
+    else:
+        slopes_20d = [0] * 5
+    
+    # 3. 5天切5段
+    if len(prices) >= 6:
+        slopes_5d = normalize_and_extract(prices_array[-6:])
+    else:
+        slopes_5d = [0] * 5
+    
+    return {
+        '120d_seg1_slope': slopes_120d[0],
+        '120d_seg2_slope': slopes_120d[1],
+        '120d_seg3_slope': slopes_120d[2],
+        '120d_seg4_slope': slopes_120d[3],
+        '120d_seg5_slope': slopes_120d[4],
+        '20d_seg1_slope': slopes_20d[0],
+        '20d_seg2_slope': slopes_20d[1],
+        '20d_seg3_slope': slopes_20d[2],
+        '20d_seg4_slope': slopes_20d[3],
+        '20d_seg5_slope': slopes_20d[4],
+        '5d_seg1_slope': slopes_5d[0],
+        '5d_seg2_slope': slopes_5d[1],
+        '5d_seg3_slope': slopes_5d[2],
+        '5d_seg4_slope': slopes_5d[3],
+        '5d_seg5_slope': slopes_5d[4]
+    }
+
+
 def parse_sequence(x):
     """解析序列字串"""
     if pd.isna(x):
@@ -31,11 +150,28 @@ def preprocess_new_data(data, feature_columns, use_advanced=False):
     
     print("\n資料預處理...")
     
-    # 0. 移除無效欄位（數字欄位名稱或空欄位）
+    # 0. 移除無效欄位
     invalid_cols = [col for col in df.columns if isinstance(col, (int, float)) or str(col).strip() == '']
     if invalid_cols:
         print(f"✓ 移除無效欄位: {invalid_cols}")
         df = df.drop(columns=invalid_cols)
+    
+    # === 新增: 從 120天收盤價序列提取15個斜率特徵 ===
+    if '120天收盤價序列' in df.columns:
+        print(f"✓ 從 120天收盤價序列提取趨勢斜率特徵...")
+        
+        slope_features_list = []
+        for idx, row in df.iterrows():
+            slope_features = extract_trend_features_from_120d(row['120天收盤價序列'])
+            slope_features_list.append(slope_features)
+        
+        slope_df = pd.DataFrame(slope_features_list)
+        df = pd.concat([df, slope_df], axis=1)
+        print(f"✓ 成功提取 {len(slope_df.columns)} 個趨勢斜率特徵")
+    else:
+        print(f"⚠ 警告: 找不到 '120天收盤價序列' 欄位")
+        print(f"  趨勢斜率特徵將全部設為 0")
+        print(f"  請在 Excel 中加入此欄位以獲得更準確的預測")
     
     # 1. 處理產業欄位
     if '產業' in df.columns:
@@ -43,28 +179,8 @@ def preprocess_new_data(data, feature_columns, use_advanced=False):
         df = pd.concat([df, industry_dummies], axis=1)
         print(f"✓ 產業欄位已轉換")
     
-    # 2. 處理序列資料
-    sequence_cols = [col for col in df.columns if '序列' in str(col)]
-    
-    if use_advanced:
-        # 進階版本：提取多個特徵
-        print(f"✓ 使用進階特徵提取（每個序列 6 個特徵）")
-        for col in sequence_cols:
-            sequences = df[col].apply(parse_sequence)
-            
-            df[f"{col}_last"] = sequences.apply(lambda x: x[-1] if x else np.nan)
-            df[f"{col}_mean"] = sequences.apply(lambda x: np.mean(x) if x else np.nan)
-            df[f"{col}_std"] = sequences.apply(lambda x: np.std(x) if x else np.nan)
-            df[f"{col}_trend"] = sequences.apply(lambda x: x[-1] - x[0] if len(x) > 1 else np.nan)
-            df[f"{col}_max"] = sequences.apply(lambda x: np.max(x) if x else np.nan)
-            df[f"{col}_min"] = sequences.apply(lambda x: np.min(x) if x else np.nan)
-            
-            df = df.drop(columns=[col])
-    else:
-        # 基礎版本：只用最後一個值
-        print(f"✓ 使用基礎特徵提取（只用最新值）")
-        for col in sequence_cols:
-            df[col] = df[col].apply(lambda x: parse_sequence(x)[-1] if parse_sequence(x) else np.nan)
+    # 2. 忽略 ADX/RSI 序列（與訓練時一致）
+    # 不處理序列資料
     
     # 3. 確保所有訓練時的特徵都存在
     missing_features = set(feature_columns) - set(df.columns)
@@ -77,7 +193,10 @@ def preprocess_new_data(data, feature_columns, use_advanced=False):
     # 4. 填補缺失值
     for col in feature_columns:
         if col in df.columns and df[col].isnull().any():
-            df[col].fillna(df[col].median() if df[col].median() == df[col].median() else 0, inplace=True)
+            median_val = df[col].median()
+            if pd.isna(median_val):
+                median_val = 0
+            df[col].fillna(median_val, inplace=True)
     
     # 5. 只保留訓練時使用的特徵，並按照相同順序
     df = df[feature_columns]
