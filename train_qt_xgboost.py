@@ -1,6 +1,8 @@
 """
 QT 當沖潛力預測模型訓練腳本（使用 XGBoost）
 適合小資料集，不需要 TensorFlow
+
+新版本: 從 120天收盤價序列提取15個趨勢斜率特徵
 """
 
 import pandas as pd
@@ -19,6 +21,139 @@ warnings.filterwarnings('ignore')
 # 設定中文字體
 plt.rcParams['font.sans-serif'] = ['Microsoft JhengHei', 'Arial']
 plt.rcParams['axes.unicode_minus'] = False
+
+
+def calculate_trend_slope(prices):
+    """
+    計算趨勢線斜率（線性回歸）
+    
+    參數:
+    prices: 價格序列（已標準化）
+    
+    返回:
+    slope: 趨勢線斜率
+    """
+    if len(prices) < 2:
+        return 0
+    x = np.arange(len(prices))
+    y = prices  # 直接使用價格（已標準化）
+    slope, _ = np.polyfit(x, y, 1)
+    return slope
+
+
+def extract_overlapping_slopes(prices, num_segments=5):
+    """
+    用重疊窗口提取趨勢斜率
+    
+    參數:
+    prices: 價格序列（已標準化）
+    num_segments: 要切成幾段
+    
+    返回:
+    list: 每段的趨勢斜率
+    """
+    prices = np.array(prices)
+    n = len(prices)
+    
+    if n < num_segments + 1:
+        return [0] * num_segments
+    
+    # 計算每段的跨度
+    segment_span = (n - 1) / num_segments
+    
+    slopes = []
+    
+    for i in range(num_segments):
+        start_idx = int(i * segment_span)
+        end_idx = int((i + 1) * segment_span)
+        
+        segment = prices[start_idx:end_idx + 1]
+        slope = calculate_trend_slope(segment)
+        slopes.append(round(slope, 6))  # 保留更多小數位
+    
+    return slopes
+
+
+def extract_trend_features_from_120d(price_sequence_120d):
+    """
+    從120天收盤價序列提取15個趨勢斜率特徵
+    
+    方法: 標準化價格後計算趨勢線斜率
+    - 將價格除以第一天價格進行標準化
+    - 斜率直接反映百分比變化
+    - 不同價格的股票可以公平比較
+    
+    參數:
+    price_sequence_120d: 120天收盤價序列 (絕對價格，例如 [100, 102, 101, ...])
+    
+    返回:
+    dict: 15個斜率特徵
+    """
+    # 解析序列
+    if pd.isna(price_sequence_120d):
+        return {f'slope_{i}': 0 for i in range(1, 16)}
+    
+    if isinstance(price_sequence_120d, str):
+        s = price_sequence_120d.strip('[]').strip()
+        prices = [float(v.strip()) for v in s.split(',') if v.strip()]
+    else:
+        prices = list(price_sequence_120d)
+    
+    if len(prices) < 120:
+        print(f"  ⚠ 警告: 序列長度不足 ({len(prices)} < 120)")
+        return {f'slope_{i}': 0 for i in range(1, 16)}
+    
+    prices_array = np.array(prices)
+    
+    # === 方案 B: 標準化價格 ===
+    # 將每段的價格除以該段第一天的價格
+    # 這樣斜率就代表「相對於起始價格的每日變化率」
+    
+    def normalize_and_extract(price_segment):
+        """標準化並提取斜率"""
+        if len(price_segment) < 2:
+            return [0] * 5
+        
+        # 標準化: 除以第一個價格
+        if price_segment[0] != 0:
+            normalized = price_segment / price_segment[0]
+        else:
+            normalized = price_segment
+        
+        return extract_overlapping_slopes(normalized, num_segments=5)
+    
+    # 1. 120天切5段 (使用全部120天)
+    slopes_120d = normalize_and_extract(prices_array)
+    
+    # 2. 60天切5段 (使用最近61天)
+    if len(prices) >= 61:
+        slopes_60d = normalize_and_extract(prices_array[-61:])
+    else:
+        slopes_60d = [0] * 5
+    
+    # 3. 5天切5段 (使用最近6天)
+    if len(prices) >= 6:
+        slopes_5d = normalize_and_extract(prices_array[-6:])
+    else:
+        slopes_5d = [0] * 5
+    
+    return {
+        '120d_seg1_slope': slopes_120d[0],
+        '120d_seg2_slope': slopes_120d[1],
+        '120d_seg3_slope': slopes_120d[2],
+        '120d_seg4_slope': slopes_120d[3],
+        '120d_seg5_slope': slopes_120d[4],
+        '60d_seg1_slope': slopes_60d[0],
+        '60d_seg2_slope': slopes_60d[1],
+        '60d_seg3_slope': slopes_60d[2],
+        '60d_seg4_slope': slopes_60d[3],
+        '60d_seg5_slope': slopes_60d[4],
+        '5d_seg1_slope': slopes_5d[0],
+        '5d_seg2_slope': slopes_5d[1],
+        '5d_seg3_slope': slopes_5d[2],
+        '5d_seg4_slope': slopes_5d[3],
+        '5d_seg5_slope': slopes_5d[4]
+    }
 
 
 class QTModelTrainer:
@@ -62,11 +197,59 @@ class QTModelTrainer:
         # 分離特徵和目標變數
         self.target_columns = [col for col in self.data.columns if col.startswith('#')]
         exclude_cols = ['開盤日期', '公司代碼'] + self.target_columns
-        self.feature_columns = [col for col in self.data.columns if col not in exclude_cols]
         
-        print(f"✓ 特徵欄位數: {len(self.feature_columns)}")
+        # 先不包含任何序列欄位
+        self.feature_columns = [col for col in self.data.columns 
+                               if col not in exclude_cols 
+                               and '序列' not in col
+                               and not col.startswith('Unnamed')]
+        
+        print(f"✓ 原始特徵欄位數: {len(self.feature_columns)}")
         print(f"✓ 目標欄位數: {len(self.target_columns)}")
         print(f"\n目標變數: {', '.join(self.target_columns)}")
+        
+        # === 新增: 從 120天收盤價序列提取15個斜率特徵 ===
+        if '120天收盤價序列' in self.data.columns:
+            print(f"\n✓ 發現 120天收盤價序列，開始提取趨勢斜率特徵...")
+            
+            # 顯示提取結果
+            print("\n" + "-" * 60)
+            print("趨勢斜率特徵提取結果:")
+            print("-" * 60)
+            
+            slope_features_list = []
+            for idx, row in self.data.iterrows():
+                print(f"\n記錄 {idx + 1} ({row['公司代碼']}):")
+                
+                # 提取15個斜率特徵
+                slope_features = extract_trend_features_from_120d(row['120天收盤價序列'])
+                slope_features_list.append(slope_features)
+                
+                # 顯示提取的特徵
+                print("  120天 5段斜率:")
+                for i in range(1, 6):
+                    print(f"    段{i}: {slope_features[f'120d_seg{i}_slope']:>8.4f}")
+                
+                print("  60天 5段斜率:")
+                for i in range(1, 6):
+                    print(f"    段{i}: {slope_features[f'60d_seg{i}_slope']:>8.4f}")
+                
+                print("  5天 5段斜率:")
+                for i in range(1, 6):
+                    print(f"    段{i}: {slope_features[f'5d_seg{i}_slope']:>8.4f}")
+            
+            # 將斜率特徵加入資料
+            slope_df = pd.DataFrame(slope_features_list)
+            self.data = pd.concat([self.data, slope_df], axis=1)
+            
+            # 更新特徵欄位列表
+            self.feature_columns.extend(slope_df.columns.tolist())
+            
+            print("\n" + "-" * 60)
+            print(f"✓ 成功提取 {len(slope_df.columns)} 個趨勢斜率特徵")
+            print("-" * 60)
+        else:
+            print("\n⚠ 警告: 找不到 '120天收盤價序列' 欄位")
         
         # 處理產業欄位（One-Hot Encoding）
         if '產業' in self.data.columns:
@@ -74,24 +257,7 @@ class QTModelTrainer:
             self.data = pd.concat([self.data, industry_dummies], axis=1)
             self.feature_columns.remove('產業')
             self.feature_columns.extend(industry_dummies.columns.tolist())
-            print(f"✓ 產業欄位已轉換為 One-Hot Encoding ({len(industry_dummies.columns)} 個類別)")
-        
-        # 處理序列資料（取最後一個值）
-        sequence_cols = [col for col in self.feature_columns if '序列' in col]
-        if sequence_cols:
-            print(f"✓ 處理序列資料: {len(sequence_cols)} 個欄位")
-            for col in sequence_cols:
-                def parse_sequence(x):
-                    if pd.isna(x):
-                        return np.nan
-                    # 處理列表格式 '[41.9, 39.7, 25.0]' 或逗號分隔 '41.9, 39.7, 25.0'
-                    s = str(x).strip('[]').strip()
-                    values = [float(v.strip()) for v in s.split(',') if v.strip()]
-                    return values[-1] if values else np.nan
-                
-                self.data[col] = self.data[col].apply(parse_sequence)
-                # 確保轉換為數值型
-                self.data[col] = pd.to_numeric(self.data[col], errors='coerce')
+            print(f"\n✓ 產業欄位已轉換為 One-Hot Encoding ({len(industry_dummies.columns)} 個類別)")
         
         # 處理缺失值
         missing = self.data[self.feature_columns].isnull().sum().sum()
@@ -99,11 +265,15 @@ class QTModelTrainer:
             print(f"✓ 發現 {missing} 個缺失值，使用中位數填補")
             for col in self.feature_columns:
                 if self.data[col].isnull().any():
-                    self.data[col].fillna(self.data[col].median(), inplace=True)
+                    median_val = self.data[col].median()
+                    if pd.isna(median_val):
+                        median_val = 0
+                    self.data[col].fillna(median_val, inplace=True)
         else:
             print("✓ 無缺失值")
         
         print(f"\n最終特徵數量: {len(self.feature_columns)}")
+        print(f"特徵列表: {self.feature_columns}")
         
         return self
     
