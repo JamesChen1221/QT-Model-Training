@@ -197,15 +197,17 @@ class QTModelTrainer:
         print("=" * 60)
         
         # 分離特徵和目標變數
-        self.target_columns = [col for col in self.data.columns if col.startswith('#')]
-        exclude_cols = ['開盤日期', '公司代碼'] + self.target_columns
+        # 目標欄位: 以 '#' 開頭
+        self.target_columns = [col for col in self.data.columns if str(col).startswith('#')]
         
-        # 先不包含任何序列欄位和無效欄位
+        # 排除欄位: 開盤日期、公司代碼、目標欄位、以 '*' 開頭的欄位
+        exclude_cols = ['開盤日期', '公司代碼'] + self.target_columns
+        exclude_cols += [col for col in self.data.columns if str(col).startswith('*')]
+        
+        # 特徵欄位: 不在排除列表中，且不包含'序列'（序列會特殊處理）
         self.feature_columns = [col for col in self.data.columns 
                                if col not in exclude_cols 
-                               and '序列' not in col
-                               and not col.startswith('Unnamed')
-                               and col != '備註']  # 排除備註欄位
+                               and '序列' not in str(col)]
         
         print(f"✓ 原始特徵欄位數: {len(self.feature_columns)}")
         print(f"✓ 目標欄位數: {len(self.target_columns)}")

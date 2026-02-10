@@ -145,18 +145,20 @@ def preprocess_new_data(data, feature_columns, use_advanced=False):
     - data: 新資料 DataFrame
     - feature_columns: 訓練時使用的特徵欄位
     - use_advanced: 是否使用進階特徵提取
+    
+    注意: 此函數的邏輯必須與 train_qt_xgboost.py 中的 preprocess_data 完全一致
     """
     df = data.copy()
     
     print("\n資料預處理...")
     
-    # 0. 移除無效欄位
+    # 0. 移除無效欄位（空白或數字欄位名）
     invalid_cols = [col for col in df.columns if isinstance(col, (int, float)) or str(col).strip() == '']
     if invalid_cols:
         print(f"✓ 移除無效欄位: {invalid_cols}")
         df = df.drop(columns=invalid_cols)
     
-    # === 新增: 從 120天收盤價序列提取15個斜率特徵 ===
+    # === 從 120天收盤價序列提取15個斜率特徵 ===
     if '120天收盤價序列' in df.columns:
         print(f"✓ 從 120天收盤價序列提取趨勢斜率特徵...")
         
@@ -172,17 +174,23 @@ def preprocess_new_data(data, feature_columns, use_advanced=False):
         print(f"⚠ 警告: 找不到 '120天收盤價序列' 欄位")
         print(f"  趨勢斜率特徵將全部設為 0")
         print(f"  請在 Excel 中加入此欄位以獲得更準確的預測")
+        
+        # 如果缺少序列，需要手動創建斜率特徵（全部為0）
+        slope_feature_names = [
+            '120d_seg1_slope', '120d_seg2_slope', '120d_seg3_slope', '120d_seg4_slope', '120d_seg5_slope',
+            '20d_seg1_slope', '20d_seg2_slope', '20d_seg3_slope', '20d_seg4_slope', '20d_seg5_slope',
+            '5d_seg1_slope', '5d_seg2_slope', '5d_seg3_slope', '5d_seg4_slope', '5d_seg5_slope'
+        ]
+        for feat in slope_feature_names:
+            df[feat] = 0
     
-    # 1. 處理產業欄位
+    # 1. 處理產業欄位（One-Hot Encoding）
     if '產業' in df.columns:
         industry_dummies = pd.get_dummies(df['產業'], prefix='產業')
         df = pd.concat([df, industry_dummies], axis=1)
-        print(f"✓ 產業欄位已轉換")
+        print(f"✓ 產業欄位已轉換為 One-Hot Encoding ({len(industry_dummies.columns)} 個類別)")
     
-    # 2. 忽略 ADX/RSI 序列（與訓練時一致）
-    # 不處理序列資料
-    
-    # 3. 確保所有訓練時的特徵都存在
+    # 2. 確保所有訓練時的特徵都存在
     missing_features = set(feature_columns) - set(df.columns)
     if missing_features:
         print(f"⚠ 缺少特徵: {missing_features}")
@@ -190,8 +198,8 @@ def preprocess_new_data(data, feature_columns, use_advanced=False):
         for feat in missing_features:
             df[feat] = 0
     
-    # 4. 填補缺失值
-    # 特殊處理: 觸發類型 2 (消息面) 的財報欄位應該填 0
+    # 3. 填補缺失值
+    # 特殊處理: 觸發類型 2 (消息面) 的財報欄位應該填 0，不是中位數
     financial_cols = ['EPS Surprise (%)', 'Revenue Surprise (%)', '展望 (Guidance)']
     
     if '觸發類型' in df.columns:
@@ -211,7 +219,7 @@ def preprocess_new_data(data, feature_columns, use_advanced=False):
                         median_val = 0
                     df.loc[mask_other, col] = df.loc[mask_other, col].fillna(median_val)
     
-    # 處理其他欄位的缺失值
+    # 處理其他欄位的缺失值（用中位數）
     for col in feature_columns:
         if col not in financial_cols and col in df.columns and df[col].isnull().any():
             median_val = df[col].median()
@@ -219,7 +227,8 @@ def preprocess_new_data(data, feature_columns, use_advanced=False):
                 median_val = 0
             df[col].fillna(median_val, inplace=True)
     
-    # 5. 只保留訓練時使用的特徵，並按照相同順序
+    # 4. 只保留訓練時使用的特徵，並按照相同順序
+    # 注意: feature_columns 已經排除了 * 和 # 開頭的欄位
     df = df[feature_columns]
     
     print(f"✓ 預處理完成，特徵數: {len(feature_columns)}")
