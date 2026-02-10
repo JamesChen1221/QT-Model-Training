@@ -1,17 +1,47 @@
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
-env/
-venv/
 *.egg-info/
 dist/
 build/
+
+# 虛擬環境
+env/
+venv/
+.venv/
+
+# 模型檔案（自動生成）
 models/*.pkl
 models/*.h5
 models/*.keras
+models/*.png
+
+# 資料檔案
 *.csv
-!data/sample_data.csv
+data/new_predictions.csv
+
+# Jupyter Notebook
 .ipynb_checkpoints/
+*.ipynb
+
+# 日誌
 *.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 系統檔案
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 臨時檔案
+.tmp.driveupload/
+*.tmp
+*.bak

@@ -129,22 +129,13 @@ def extract_trend_features_from_120d(price_sequence_120d):
     }
 
 
-def parse_sequence(x):
-    """解析序列字串"""
-    if pd.isna(x):
-        return []
-    s = str(x).strip('[]').strip()
-    return [float(v.strip()) for v in s.split(',') if v.strip()]
-
-
-def preprocess_new_data(data, feature_columns, use_advanced=False):
+def preprocess_new_data(data, feature_columns):
     """
     預處理新資料（與訓練時相同的處理）
     
     參數:
     - data: 新資料 DataFrame
     - feature_columns: 訓練時使用的特徵欄位
-    - use_advanced: 是否使用進階特徵提取
     
     注意: 此函數的邏輯必須與 train_qt_xgboost.py 中的 preprocess_data 完全一致
     """
@@ -237,7 +228,7 @@ def preprocess_new_data(data, feature_columns, use_advanced=False):
 
 
 def predict_stocks(input_file, model_dir='models/', 
-                   output_file='data/new_predictions.csv', use_advanced=False):
+                   output_file='data/new_predictions.csv'):
     """
     使用所有訓練好的模型預測新股票的當沖潛力
     
@@ -245,7 +236,6 @@ def predict_stocks(input_file, model_dir='models/',
     - input_file: 輸入檔案路徑（Excel 或 CSV）
     - model_dir: 模型資料夾路徑
     - output_file: 輸出檔案路徑
-    - use_advanced: 是否使用進階模型
     """
     print("=" * 60)
     print("QT 當沖潛力預測系統 - 多目標預測")
@@ -308,7 +298,7 @@ def predict_stocks(input_file, model_dir='models/',
         target_column = model_info['target']  # 從 model_info 取得，不是從 model_data
         
         # 預處理資料
-        processed_data = preprocess_new_data(data, feature_columns, use_advanced)
+        processed_data = preprocess_new_data(data, feature_columns)
         
         # 標準化
         X = processed_data.values
@@ -422,8 +412,6 @@ def main():
     parser.add_argument('--output', '-o', type=str,
                        default='data/new_predictions.csv',
                        help='輸出結果檔案路徑')
-    parser.add_argument('--advanced', '-a', action='store_true',
-                       help='使用進階模型（需要先訓練 train_qt_advanced.py）')
     
     args = parser.parse_args()
     
@@ -431,8 +419,7 @@ def main():
     result = predict_stocks(
         input_file=args.input,
         model_dir=args.model_dir,
-        output_file=args.output,
-        use_advanced=args.advanced
+        output_file=args.output
     )
     
     if result is not None:
