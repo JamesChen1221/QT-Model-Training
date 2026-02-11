@@ -6,6 +6,15 @@
 
 ## 🚀 快速開始
 
+### 0. 準備資料
+
+**重要**：Excel 資料檔案未包含在此倉庫中，你需要自行準備。
+
+1. 準備訓練資料：`data/QT Training Data.xlsx`
+2. 準備預測資料：`data/Stock TBP.xlsx`
+
+詳細資料格式請參考 `data/README.md`
+
 ### 1. 安裝依賴
 ```bash
 pip install -r requirements.txt
