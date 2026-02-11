@@ -21,7 +21,11 @@ models/*.png
 
 # 資料檔案
 *.csv
+*.xlsx
+*.xls
 data/new_predictions.csv
+data/*.xlsx
+data/*.xls
 
 # Jupyter Notebook
 .ipynb_checkpoints/
