@@ -17,8 +17,8 @@ echo.
 echo 已生成 4 個模型檔案:
 echo   • models\qt_model_開盤_pct.pkl
 echo   • models\qt_model_10分鐘低價_pct.pkl
+echo   • models\qt_model_0.5小時最高價_pct.pkl
 echo   • models\qt_model_1.5小時高價_pct.pkl
-echo   • models\qt_model_最高價前的最低價_pct.pkl
 echo.
 echo 按任意鍵關閉...
 pause > nul
