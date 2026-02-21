@@ -3,10 +3,15 @@
 只需要輸入特徵資料，不需要目標標籤
 """
 
+import sys
+import io
+# 修復 Windows 控制台編碼問題
+if sys.platform == 'win32':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+
 import pandas as pd
 import numpy as np
 import joblib
-import sys
 from pathlib import Path
 from sklearn.neighbors import NearestNeighbors
 import xgboost as xgb
@@ -318,7 +323,13 @@ def predict_with_confidence(model, X_new, X_train, y_train, scaler, n_bootstrap=
     
     # 4. 計算相似度（與訓練資料的相似程度）
     # 使用標準化後的資料計算距離
-    X_train_scaled = scaler.transform(X_train)
+    # 先填補 NaN 值（用 0 填補，因為已經標準化）
+    X_train_filled = np.nan_to_num(X_train, nan=0.0)
+    X_train_scaled = scaler.transform(X_train_filled)
+    
+    # 確保沒有 NaN 或 inf
+    X_train_scaled = np.nan_to_num(X_train_scaled, nan=0.0, posinf=0.0, neginf=0.0)
+    
     nn = NearestNeighbors(n_neighbors=min(5, len(X_train)))
     nn.fit(X_train_scaled)
     distances, _ = nn.kneighbors(X_new)
