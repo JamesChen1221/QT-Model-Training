@@ -5,10 +5,16 @@ QT 當沖潛力預測模型訓練腳本（使用 XGBoost）
 新版本: 從 120天收盤價序列提取15個趨勢斜率特徵
 """
 
+import sys
+import io
+# 修復 Windows 控制台編碼問題
+if sys.platform == 'win32':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, KFold, cross_val_score, cross_validate
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 import xgboost as xgb
@@ -160,7 +166,7 @@ def extract_trend_features_from_120d(price_sequence_120d):
 class QTModelTrainer:
     """QT 當沖潛力預測模型訓練器（XGBoost 版本）"""
     
-    def __init__(self):
+    def __init__(self, use_cv=False, cv_folds=5):
         self.data = None
         self.X_train = None
         self.X_test = None
@@ -171,6 +177,9 @@ class QTModelTrainer:
         self.feature_columns = None
         self.target_columns = None
         self.feature_importance = None
+        self.use_cv = use_cv  # 是否使用交叉驗證
+        self.cv_folds = cv_folds  # 交叉驗證折數
+        self.cv_scores = None  # 儲存 CV 分數
         
     def load_data(self, filepath='data/QT Training Data.xlsx'):
         """載入 Excel 資料"""
@@ -300,28 +309,51 @@ class QTModelTrainer:
         return self
     
     def split_data(self, target_column, test_size=0.2, random_state=42):
-        """分割訓練集和測試集"""
+        """分割訓練集和測試集（或準備 CV）"""
         print("\n" + "=" * 60)
-        print(f"步驟 3: 分割訓練集和測試集 - {target_column}")
+        if self.use_cv:
+            print(f"步驟 3: 準備 {self.cv_folds}-Fold Cross-Validation - {target_column}")
+        else:
+            print(f"步驟 3: 分割訓練集和測試集 - {target_column}")
         print("=" * 60)
         
         X = self.data[self.feature_columns].values
         y = self.data[target_column].values
         
-        # 分割資料
-        self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(
-            X, y, test_size=test_size, random_state=random_state
-        )
-        
-        print(f"✓ 訓練集樣本數: {len(self.X_train)} 筆 ({(1-test_size)*100:.0f}%)")
-        print(f"✓ 測試集樣本數: {len(self.X_test)} 筆 ({test_size*100:.0f}%)")
-        print(f"✓ 特徵維度: {self.X_train.shape[1]}")
-        
-        # 標準化
-        print(f"\n✓ 標準化特徵")
-        self.scaler = StandardScaler()
-        self.X_train = self.scaler.fit_transform(self.X_train)
-        self.X_test = self.scaler.transform(self.X_test)
+        if self.use_cv:
+            # Cross-Validation 模式：使用全部資料
+            print(f"✓ 使用全部資料進行 {self.cv_folds}-Fold Cross-Validation")
+            print(f"✓ 總樣本數: {len(X)} 筆")
+            print(f"✓ 每折訓練集: ~{int(len(X) * (self.cv_folds-1) / self.cv_folds)} 筆")
+            print(f"✓ 每折驗證集: ~{int(len(X) / self.cv_folds)} 筆")
+            print(f"✓ 特徵維度: {X.shape[1]}")
+            
+            # 儲存全部資料（用於最終模型訓練）
+            self.X_train = X
+            self.y_train = y
+            self.X_test = None
+            self.y_test = None
+            
+            # 標準化（用於最終模型）
+            print(f"\n✓ 標準化特徵")
+            self.scaler = StandardScaler()
+            self.X_train = self.scaler.fit_transform(self.X_train)
+            
+        else:
+            # 傳統單次分割
+            self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(
+                X, y, test_size=test_size, random_state=random_state
+            )
+            
+            print(f"✓ 訓練集樣本數: {len(self.X_train)} 筆 ({(1-test_size)*100:.0f}%)")
+            print(f"✓ 測試集樣本數: {len(self.X_test)} 筆 ({test_size*100:.0f}%)")
+            print(f"✓ 特徵維度: {self.X_train.shape[1]}")
+            
+            # 標準化
+            print(f"\n✓ 標準化特徵")
+            self.scaler = StandardScaler()
+            self.X_train = self.scaler.fit_transform(self.X_train)
+            self.X_test = self.scaler.transform(self.X_test)
         
         return self
     
@@ -353,15 +385,60 @@ class QTModelTrainer:
             verbosity=0
         )
         
-        print(f"\n開始訓練...")
-        print("-" * 60)
-        
-        # 訓練模型（帶驗證集）
-        self.model.fit(
-            self.X_train, self.y_train,
-            eval_set=[(self.X_train, self.y_train), (self.X_test, self.y_test)],
-            verbose=False
-        )
+        if self.use_cv:
+            # Cross-Validation 模式
+            print(f"\n執行 {self.cv_folds}-Fold Cross-Validation...")
+            print("-" * 60)
+            
+            # 準備 CV
+            kfold = KFold(n_splits=self.cv_folds, shuffle=True, random_state=42)
+            
+            # 執行 CV（計算多個指標）
+            scoring = {
+                'neg_mae': 'neg_mean_absolute_error',
+                'neg_rmse': 'neg_root_mean_squared_error',
+                'r2': 'r2'
+            }
+            
+            cv_results = cross_validate(
+                self.model, self.X_train, self.y_train,
+                cv=kfold, scoring=scoring, return_train_score=True
+            )
+            
+            # 儲存 CV 結果
+            self.cv_scores = {
+                'train_mae': -cv_results['train_neg_mae'],
+                'test_mae': -cv_results['test_neg_mae'],
+                'train_rmse': -cv_results['train_neg_rmse'],
+                'test_rmse': -cv_results['test_neg_rmse'],
+                'train_r2': cv_results['train_r2'],
+                'test_r2': cv_results['test_r2']
+            }
+            
+            # 顯示 CV 結果
+            print(f"\n✓ Cross-Validation 結果:")
+            print(f"  訓練集 MAE:  {self.cv_scores['train_mae'].mean():.4f} ± {self.cv_scores['train_mae'].std():.4f}")
+            print(f"  驗證集 MAE:  {self.cv_scores['test_mae'].mean():.4f} ± {self.cv_scores['test_mae'].std():.4f}")
+            print(f"  訓練集 RMSE: {self.cv_scores['train_rmse'].mean():.4f} ± {self.cv_scores['train_rmse'].std():.4f}")
+            print(f"  驗證集 RMSE: {self.cv_scores['test_rmse'].mean():.4f} ± {self.cv_scores['test_rmse'].std():.4f}")
+            print(f"  訓練集 R²:   {self.cv_scores['train_r2'].mean():.4f} ± {self.cv_scores['train_r2'].std():.4f}")
+            print(f"  驗證集 R²:   {self.cv_scores['test_r2'].mean():.4f} ± {self.cv_scores['test_r2'].std():.4f}")
+            
+            # 用全部資料訓練最終模型
+            print(f"\n✓ 用全部資料訓練最終模型...")
+            self.model.fit(self.X_train, self.y_train, verbose=False)
+            
+        else:
+            # 傳統單次分割模式
+            print(f"\n開始訓練...")
+            print("-" * 60)
+            
+            # 訓練模型（帶驗證集）
+            self.model.fit(
+                self.X_train, self.y_train,
+                eval_set=[(self.X_train, self.y_train), (self.X_test, self.y_test)],
+                verbose=False
+            )
         
         print("-" * 60)
         print("✓ 訓練完成！")
@@ -380,36 +457,71 @@ class QTModelTrainer:
         print("步驟 5: 評估模型")
         print("=" * 60)
         
-        # 訓練集預測
-        y_train_pred = self.model.predict(self.X_train)
-        train_rmse = np.sqrt(mean_squared_error(self.y_train, y_train_pred))
-        train_mae = mean_absolute_error(self.y_train, y_train_pred)
-        train_r2 = r2_score(self.y_train, y_train_pred)
-        
-        # 測試集預測
-        y_test_pred = self.model.predict(self.X_test)
-        test_rmse = np.sqrt(mean_squared_error(self.y_test, y_test_pred))
-        test_mae = mean_absolute_error(self.y_test, y_test_pred)
-        test_r2 = r2_score(self.y_test, y_test_pred)
-        
-        print(f"✓ 訓練集評估:")
-        print(f"  - RMSE: {train_rmse:.4f}")
-        print(f"  - MAE: {train_mae:.4f}")
-        print(f"  - R² Score: {train_r2:.4f}")
-        
-        print(f"\n✓ 測試集評估:")
-        print(f"  - RMSE: {test_rmse:.4f}")
-        print(f"  - MAE: {test_mae:.4f}")
-        print(f"  - R² Score: {test_r2:.4f}")
-        
-        # 預測範例
-        print(f"\n✓ 預測範例:")
-        comparison = pd.DataFrame({
-            '實際值': self.y_test,
-            '預測值': y_test_pred,
-            '誤差': np.abs(self.y_test - y_test_pred)
-        })
-        print(comparison.to_string(index=False))
+        if self.use_cv:
+            # CV 模式：顯示 CV 結果摘要
+            print(f"✓ Cross-Validation 評估結果:")
+            print(f"\n  驗證集表現（{self.cv_folds}-Fold 平均）:")
+            print(f"  - MAE:  {self.cv_scores['test_mae'].mean():.4f} ± {self.cv_scores['test_mae'].std():.4f}")
+            print(f"  - RMSE: {self.cv_scores['test_rmse'].mean():.4f} ± {self.cv_scores['test_rmse'].std():.4f}")
+            print(f"  - R²:   {self.cv_scores['test_r2'].mean():.4f} ± {self.cv_scores['test_r2'].std():.4f}")
+            
+            print(f"\n  訓練集表現（{self.cv_folds}-Fold 平均）:")
+            print(f"  - MAE:  {self.cv_scores['train_mae'].mean():.4f} ± {self.cv_scores['train_mae'].std():.4f}")
+            print(f"  - RMSE: {self.cv_scores['train_rmse'].mean():.4f} ± {self.cv_scores['train_rmse'].std():.4f}")
+            print(f"  - R²:   {self.cv_scores['train_r2'].mean():.4f} ± {self.cv_scores['train_r2'].std():.4f}")
+            
+            print(f"\n  模型穩定性:")
+            rmse_std = self.cv_scores['test_rmse'].std()
+            if rmse_std < 2:
+                print(f"  ✓ 非常穩定（RMSE 標準差 = {rmse_std:.4f}）")
+            elif rmse_std < 5:
+                print(f"  ✓ 穩定（RMSE 標準差 = {rmse_std:.4f}）")
+            else:
+                print(f"  ⚠ 不穩定（RMSE 標準差 = {rmse_std:.4f}）")
+            
+            # 最終模型在全部資料上的表現
+            print(f"\n✓ 最終模型（用全部資料訓練）:")
+            y_pred = self.model.predict(self.X_train)
+            final_rmse = np.sqrt(mean_squared_error(self.y_train, y_pred))
+            final_mae = mean_absolute_error(self.y_train, y_pred)
+            final_r2 = r2_score(self.y_train, y_pred)
+            print(f"  - RMSE: {final_rmse:.4f}")
+            print(f"  - MAE: {final_mae:.4f}")
+            print(f"  - R²: {final_r2:.4f}")
+            print(f"  （預期泛化表現: MAE ≈ {self.cv_scores['test_mae'].mean():.4f}）")
+            
+        else:
+            # 傳統單次分割模式
+            # 訓練集預測
+            y_train_pred = self.model.predict(self.X_train)
+            train_rmse = np.sqrt(mean_squared_error(self.y_train, y_train_pred))
+            train_mae = mean_absolute_error(self.y_train, y_train_pred)
+            train_r2 = r2_score(self.y_train, y_train_pred)
+            
+            # 測試集預測
+            y_test_pred = self.model.predict(self.X_test)
+            test_rmse = np.sqrt(mean_squared_error(self.y_test, y_test_pred))
+            test_mae = mean_absolute_error(self.y_test, y_test_pred)
+            test_r2 = r2_score(self.y_test, y_test_pred)
+            
+            print(f"✓ 訓練集評估:")
+            print(f"  - RMSE: {train_rmse:.4f}")
+            print(f"  - MAE: {train_mae:.4f}")
+            print(f"  - R² Score: {train_r2:.4f}")
+            
+            print(f"\n✓ 測試集評估:")
+            print(f"  - RMSE: {test_rmse:.4f}")
+            print(f"  - MAE: {test_mae:.4f}")
+            print(f"  - R² Score: {test_r2:.4f}")
+            
+            # 預測範例
+            print(f"\n✓ 預測範例:")
+            comparison = pd.DataFrame({
+                '實際值': self.y_test,
+                '預測值': y_test_pred,
+                '誤差': np.abs(self.y_test - y_test_pred)
+            })
+            print(comparison.to_string(index=False))
         
         return self
     
@@ -430,39 +542,93 @@ class QTModelTrainer:
         axes[0, 0].set_title('特徵重要性排名（前10名）', fontweight='bold')
         axes[0, 0].invert_yaxis()
         
-        # 2. 預測 vs 實際（測試集）
-        y_pred = self.model.predict(self.X_test)
-        axes[0, 1].scatter(self.y_test, y_pred, alpha=0.6)
-        axes[0, 1].plot([self.y_test.min(), self.y_test.max()], 
-                       [self.y_test.min(), self.y_test.max()], 
-                       'r--', lw=2)
-        axes[0, 1].set_xlabel('實際值')
-        axes[0, 1].set_ylabel('預測值')
-        axes[0, 1].set_title('預測值 vs 實際值', fontweight='bold')
-        axes[0, 1].grid(True, alpha=0.3)
-        
-        # 3. 誤差分布
-        errors = np.abs(self.y_test - y_pred)
-        axes[1, 0].hist(errors, bins=10, edgecolor='black', alpha=0.7)
-        axes[1, 0].set_xlabel('絕對誤差')
-        axes[1, 0].set_ylabel('頻率')
-        axes[1, 0].set_title('預測誤差分布', fontweight='bold')
-        axes[1, 0].axvline(errors.mean(), color='r', linestyle='--', 
-                          label=f'平均誤差: {errors.mean():.2f}')
-        axes[1, 0].legend()
-        
-        # 4. 訓練進度（使用 evals_result）
-        results = self.model.evals_result()
-        epochs = len(results['validation_0']['rmse'])
-        axes[1, 1].plot(range(epochs), results['validation_0']['rmse'], 
-                       label='訓練集 RMSE', linewidth=2)
-        axes[1, 1].plot(range(epochs), results['validation_1']['rmse'], 
-                       label='測試集 RMSE', linewidth=2)
-        axes[1, 1].set_xlabel('迭代次數')
-        axes[1, 1].set_ylabel('RMSE')
-        axes[1, 1].set_title('訓練過程（損失曲線）', fontweight='bold')
-        axes[1, 1].legend()
-        axes[1, 1].grid(True, alpha=0.3)
+        if self.use_cv:
+            # CV 模式：顯示 CV 結果
+            # 2. CV 分數分布
+            fold_indices = range(1, self.cv_folds + 1)
+            axes[0, 1].plot(fold_indices, self.cv_scores['test_mae'], 'o-', label='驗證集 MAE', linewidth=2, markersize=8)
+            axes[0, 1].plot(fold_indices, self.cv_scores['train_mae'], 's-', label='訓練集 MAE', linewidth=2, markersize=8)
+            axes[0, 1].axhline(self.cv_scores['test_mae'].mean(), color='r', linestyle='--', 
+                              label=f'平均 MAE: {self.cv_scores["test_mae"].mean():.2f}')
+            axes[0, 1].set_xlabel('Fold')
+            axes[0, 1].set_ylabel('MAE')
+            axes[0, 1].set_title('Cross-Validation 分數', fontweight='bold')
+            axes[0, 1].legend()
+            axes[0, 1].grid(True, alpha=0.3)
+            axes[0, 1].set_xticks(fold_indices)
+            
+            # 3. R² 分數分布
+            axes[1, 0].plot(fold_indices, self.cv_scores['test_r2'], 'o-', label='驗證集 R²', linewidth=2, markersize=8)
+            axes[1, 0].plot(fold_indices, self.cv_scores['train_r2'], 's-', label='訓練集 R²', linewidth=2, markersize=8)
+            axes[1, 0].axhline(self.cv_scores['test_r2'].mean(), color='r', linestyle='--',
+                              label=f'平均 R²: {self.cv_scores["test_r2"].mean():.2f}')
+            axes[1, 0].set_xlabel('Fold')
+            axes[1, 0].set_ylabel('R² Score')
+            axes[1, 0].set_title('Cross-Validation R² 分數', fontweight='bold')
+            axes[1, 0].legend()
+            axes[1, 0].grid(True, alpha=0.3)
+            axes[1, 0].set_xticks(fold_indices)
+            
+            # 4. 模型穩定性（標準差）
+            metrics = ['MAE', 'RMSE', 'R²']
+            train_stds = [
+                self.cv_scores['train_mae'].std(),
+                self.cv_scores['train_rmse'].std(),
+                self.cv_scores['train_r2'].std()
+            ]
+            test_stds = [
+                self.cv_scores['test_mae'].std(),
+                self.cv_scores['test_rmse'].std(),
+                self.cv_scores['test_r2'].std()
+            ]
+            
+            x = np.arange(len(metrics))
+            width = 0.35
+            axes[1, 1].bar(x - width/2, train_stds, width, label='訓練集', alpha=0.8)
+            axes[1, 1].bar(x + width/2, test_stds, width, label='驗證集', alpha=0.8)
+            axes[1, 1].set_xlabel('指標')
+            axes[1, 1].set_ylabel('標準差')
+            axes[1, 1].set_title('模型穩定性（標準差越小越穩定）', fontweight='bold')
+            axes[1, 1].set_xticks(x)
+            axes[1, 1].set_xticklabels(metrics)
+            axes[1, 1].legend()
+            axes[1, 1].grid(True, alpha=0.3, axis='y')
+            
+        else:
+            # 傳統單次分割模式
+            # 2. 預測 vs 實際（測試集）
+            y_pred = self.model.predict(self.X_test)
+            axes[0, 1].scatter(self.y_test, y_pred, alpha=0.6)
+            axes[0, 1].plot([self.y_test.min(), self.y_test.max()], 
+                           [self.y_test.min(), self.y_test.max()], 
+                           'r--', lw=2)
+            axes[0, 1].set_xlabel('實際值')
+            axes[0, 1].set_ylabel('預測值')
+            axes[0, 1].set_title('預測值 vs 實際值', fontweight='bold')
+            axes[0, 1].grid(True, alpha=0.3)
+            
+            # 3. 誤差分布
+            errors = np.abs(self.y_test - y_pred)
+            axes[1, 0].hist(errors, bins=10, edgecolor='black', alpha=0.7)
+            axes[1, 0].set_xlabel('絕對誤差')
+            axes[1, 0].set_ylabel('頻率')
+            axes[1, 0].set_title('預測誤差分布', fontweight='bold')
+            axes[1, 0].axvline(errors.mean(), color='r', linestyle='--', 
+                              label=f'平均誤差: {errors.mean():.2f}')
+            axes[1, 0].legend()
+            
+            # 4. 訓練進度（使用 evals_result）
+            results = self.model.evals_result()
+            epochs = len(results['validation_0']['rmse'])
+            axes[1, 1].plot(range(epochs), results['validation_0']['rmse'], 
+                           label='訓練集 RMSE', linewidth=2)
+            axes[1, 1].plot(range(epochs), results['validation_1']['rmse'], 
+                           label='測試集 RMSE', linewidth=2)
+            axes[1, 1].set_xlabel('迭代次數')
+            axes[1, 1].set_ylabel('RMSE')
+            axes[1, 1].set_title('訓練過程（損失曲線）', fontweight='bold')
+            axes[1, 1].legend()
+            axes[1, 1].grid(True, alpha=0.3)
         
         plt.tight_layout()
         
@@ -483,14 +649,24 @@ class QTModelTrainer:
         
         Path(model_path).parent.mkdir(parents=True, exist_ok=True)
         
-        # 儲存模型和相關資訊
-        joblib.dump({
+        # 準備儲存的資料
+        save_data = {
             'model': self.model,
             'scaler': self.scaler,
             'feature_columns': self.feature_columns,
             'target_column': target_column,
             'feature_importance': self.feature_importance
-        }, model_path)
+        }
+        
+        # 如果使用 CV，也儲存 CV 結果
+        if self.use_cv and self.cv_scores is not None:
+            save_data['cv_scores'] = self.cv_scores
+            save_data['use_cv'] = True
+            save_data['cv_folds'] = self.cv_folds
+            print(f"✓ 包含 Cross-Validation 結果（{self.cv_folds}-Fold）")
+        
+        # 儲存模型和相關資訊
+        joblib.dump(save_data, model_path)
         
         print(f"✓ 模型已儲存至: {model_path}")
         
@@ -520,12 +696,53 @@ def train_single_target(trainer, target_column, model_index):
 
 def main():
     """主程式 - 訓練所有目標的模型"""
+    import argparse
+    
+    parser = argparse.ArgumentParser(
+        description='QT 當沖潛力預測模型訓練',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+使用範例:
+
+1. 傳統訓練（80/20 分割）:
+   python train_qt_xgboost.py
+
+2. 使用 Cross-Validation（推薦）:
+   python train_qt_xgboost.py --cv
+
+3. 指定 CV 折數:
+   python train_qt_xgboost.py --cv --folds 10
+
+Cross-Validation 優勢:
+- 更可靠的評估結果
+- 充分利用所有資料
+- 了解模型的穩定性
+- 適合資料量 < 200 筆的情況
+        """
+    )
+    
+    parser.add_argument('--cv', action='store_true',
+                       help='使用 Cross-Validation（推薦用於 < 200 筆資料）')
+    parser.add_argument('--folds', type=int, default=5,
+                       help='Cross-Validation 折數（預設 5）')
+    
+    args = parser.parse_args()
+    
     print("\n" + "╔" + "=" * 58 + "╗")
     print("║" + " " * 10 + "QT 當沖潛力預測 - 多目標訓練系統" + " " * 12 + "║")
     print("╚" + "=" * 58 + "╝")
     
+    if args.cv:
+        print(f"\n✓ 使用 {args.folds}-Fold Cross-Validation 模式")
+        print(f"  - 更可靠的評估")
+        print(f"  - 充分利用所有資料")
+        print(f"  - 了解模型穩定性")
+    else:
+        print(f"\n✓ 使用傳統 80/20 分割模式")
+        print(f"  提示: 資料量 < 200 筆時，建議使用 --cv 參數")
+    
     # 初始化訓練器
-    trainer = QTModelTrainer()
+    trainer = QTModelTrainer(use_cv=args.cv, cv_folds=args.folds)
     
     # 載入資料並預處理（只需要做一次）
     trainer.load_data('data/QT Training Data.xlsx')\
@@ -548,7 +765,9 @@ def main():
     print("\n下一步:")
     print("1. 查看結果圖表: models/training_results_*.png")
     print("2. 使用模型預測: python predict_new_stocks.py")
-    print("3. 收集更多資料以提升準確度")
+    if args.cv:
+        print("3. CV 結果顯示模型的預期表現")
+    print("4. 收集更多資料以提升準確度")
     print()
 
 
