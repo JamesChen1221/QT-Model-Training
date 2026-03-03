@@ -5,6 +5,12 @@ QT 當沖潛力預測模型訓練腳本（使用 XGBoost）
 新版本: 從 120天收盤價序列提取15個趨勢斜率特徵
 """
 
+import sys
+import io
+# 修復 Windows 控制台編碼問題
+if sys.platform == 'win32':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -475,10 +481,70 @@ class QTModelTrainer:
         
         return self
     
+    def retrain_with_all_data(self, target_column):
+        """用全部資料重新訓練最終模型"""
+        print("\n" + "=" * 60)
+        print(f"步驟 6.5: 用全部資料重新訓練最終模型 - {target_column}")
+        print("=" * 60)
+        
+        # 準備全部資料
+        X_all = self.data[self.feature_columns].values
+        y_all = self.data[target_column].values
+        
+        print(f"✓ 使用全部資料: {len(X_all)} 筆")
+        print(f"  （之前評估時只用了 {len(self.X_train)} 筆訓練）")
+        
+        # 標準化全部資料
+        scaler_final = StandardScaler()
+        X_all_scaled = scaler_final.fit_transform(X_all)
+        
+        # 用相同參數建立新模型
+        final_model = xgb.XGBRegressor(
+            n_estimators=self.model.n_estimators,
+            max_depth=self.model.max_depth,
+            learning_rate=self.model.learning_rate,
+            objective='reg:squarederror',
+            random_state=42,
+            verbosity=0
+        )
+        
+        print(f"\n開始訓練最終模型...")
+        print("-" * 60)
+        
+        # 訓練最終模型
+        final_model.fit(X_all_scaled, y_all, verbose=False)
+        
+        print("-" * 60)
+        print("✓ 最終模型訓練完成！")
+        
+        # 更新模型和標準化器（用於儲存）
+        self.model = final_model
+        self.scaler = scaler_final
+        
+        # 更新特徵重要性
+        self.feature_importance = pd.DataFrame({
+            '特徵': self.feature_columns,
+            '重要性': self.model.feature_importances_
+        }).sort_values('重要性', ascending=False)
+        
+        # 顯示最終模型在全部資料上的表現
+        y_all_pred = final_model.predict(X_all_scaled)
+        final_rmse = np.sqrt(mean_squared_error(y_all, y_all_pred))
+        final_mae = mean_absolute_error(y_all, y_all_pred)
+        final_r2 = r2_score(y_all, y_all_pred)
+        
+        print(f"\n✓ 最終模型在全部資料上的表現:")
+        print(f"  - RMSE: {final_rmse:.4f}")
+        print(f"  - MAE: {final_mae:.4f}")
+        print(f"  - R² Score: {final_r2:.4f}")
+        print(f"\n  註: 這是訓練集表現，實際泛化表現請參考步驟 5 的測試集結果")
+        
+        return self
+    
     def save_model(self, target_column, model_path='models/qt_xgboost_model.pkl'):
         """儲存模型"""
         print("\n" + "=" * 60)
-        print(f"步驟 7: 儲存模型 - {target_column}")
+        print(f"步驟 7: 儲存最終模型 - {target_column}")
         print("=" * 60)
         
         Path(model_path).parent.mkdir(parents=True, exist_ok=True)
@@ -492,8 +558,89 @@ class QTModelTrainer:
             'feature_importance': self.feature_importance
         }, model_path)
         
-        print(f"✓ 模型已儲存至: {model_path}")
+        print(f"✓ 最終模型已儲存至: {model_path}")
+        print(f"  （此模型使用全部 {len(self.data)} 筆資料訓練）")
         
+        return self
+    def retrain_with_all_data(self, target_column):
+        """用全部資料重新訓練最終模型"""
+        print("\n" + "=" * 60)
+        print(f"步驟 6.5: 用全部資料重新訓練最終模型 - {target_column}")
+        print("=" * 60)
+
+        # 準備全部資料
+        X_all = self.data[self.feature_columns].values
+        y_all = self.data[target_column].values
+
+        print(f"✓ 使用全部資料: {len(X_all)} 筆")
+        print(f"  （之前只用了 {len(self.X_train)} 筆訓練）")
+
+        # 標準化全部資料
+        scaler_final = StandardScaler()
+        X_all_scaled = scaler_final.fit_transform(X_all)
+
+        # 用相同參數建立新模型
+        final_model = xgb.XGBRegressor(
+            n_estimators=self.model.n_estimators,
+            max_depth=self.model.max_depth,
+            learning_rate=self.model.learning_rate,
+            objective='reg:squarederror',
+            random_state=42,
+            verbosity=0
+        )
+
+        print(f"\n開始訓練最終模型...")
+        print("-" * 60)
+
+        # 訓練最終模型
+        final_model.fit(X_all_scaled, y_all, verbose=False)
+
+        print("-" * 60)
+        print("✓ 最終模型訓練完成！")
+
+        # 更新模型和標準化器（用於儲存）
+        self.model = final_model
+        self.scaler = scaler_final
+
+        # 更新特徵重要性
+        self.feature_importance = pd.DataFrame({
+            '特徵': self.feature_columns,
+            '重要性': self.model.feature_importances_
+        }).sort_values('重要性', ascending=False)
+
+        # 顯示最終模型在全部資料上的表現
+        y_all_pred = final_model.predict(X_all_scaled)
+        final_rmse = np.sqrt(mean_squared_error(y_all, y_all_pred))
+        final_mae = mean_absolute_error(y_all, y_all_pred)
+        final_r2 = r2_score(y_all, y_all_pred)
+
+        print(f"\n✓ 最終模型在全部資料上的表現:")
+        print(f"  - RMSE: {final_rmse:.4f}")
+        print(f"  - MAE: {final_mae:.4f}")
+        print(f"  - R² Score: {final_r2:.4f}")
+        print(f"\n  註: 這是訓練集表現，實際泛化表現請參考步驟 5 的測試集結果")
+
+        return self
+
+    def save_model(self, target_column, model_path='models/qt_xgboost_model.pkl'):
+        """儲存模型"""
+        print("\n" + "=" * 60)
+        print(f"步驟 7: 儲存模型 - {target_column}")
+        print("=" * 60)
+
+        Path(model_path).parent.mkdir(parents=True, exist_ok=True)
+
+        # 儲存模型和相關資訊
+        joblib.dump({
+            'model': self.model,
+            'scaler': self.scaler,
+            'feature_columns': self.feature_columns,
+            'target_column': target_column,
+            'feature_importance': self.feature_importance
+        }, model_path)
+
+        print(f"✓ 模型已儲存至: {model_path}")
+
         return self
 
 
@@ -513,6 +660,7 @@ def train_single_target(trainer, target_column, model_index):
            .build_and_train_model(n_estimators=100, max_depth=5, learning_rate=0.1)\
            .evaluate_model()\
            .plot_results(save_path=plot_path)\
+           .retrain_with_all_data(target_column=target_column)\
            .save_model(target_column=target_column, model_path=model_path)
     
     return model_path
