@@ -225,7 +225,8 @@ def preprocess_new_data(data, feature_columns):
                 # 觸發類型 2 的財報欄位填 0
                 mask_type2 = df['觸發類型'] == 2
                 if mask_type2.any():
-                    df.loc[mask_type2, col] = df.loc[mask_type2, col].fillna(0)
+                    mask_null = df[col].isnull() & mask_type2
+                    df.loc[mask_null, col] = 0
                     print(f"✓ 觸發類型 2 的 {col} 填 0")
                 
                 # 其他類型用中位數填補
@@ -234,7 +235,8 @@ def preprocess_new_data(data, feature_columns):
                     median_val = df.loc[mask_other, col].median()
                     if pd.isna(median_val):
                         median_val = 0
-                    df.loc[mask_other, col] = df.loc[mask_other, col].fillna(median_val)
+                    mask_null = df[col].isnull() & mask_other
+                    df.loc[mask_null, col] = median_val
     
     # 處理其他欄位的缺失值（用中位數）
     for col in feature_columns:
@@ -242,7 +244,7 @@ def preprocess_new_data(data, feature_columns):
             median_val = df[col].median()
             if pd.isna(median_val):
                 median_val = 0
-            df[col].fillna(median_val, inplace=True)
+            df[col] = df[col].fillna(median_val)
     
     # 4. 只保留訓練時使用的特徵，並按照相同順序
     # 注意: feature_columns 已經排除了 * 和 # 開頭的欄位
@@ -287,7 +289,7 @@ def calculate_confidence_score(prediction, interval_width, similarity_score, mod
     return confidence
 
 
-def predict_with_confidence(model, X_new, X_train, y_train, scaler, n_bootstrap=30):
+def predict_with_confidence(model, X_new, X_train, y_train, scaler, n_bootstrap=10):
     """
     預測並計算可信度
     
@@ -297,7 +299,7 @@ def predict_with_confidence(model, X_new, X_train, y_train, scaler, n_bootstrap=
     - X_train: 訓練資料特徵（未標準化）
     - y_train: 訓練資料目標
     - scaler: 標準化器
-    - n_bootstrap: Bootstrap 迭代次數（預設 30）
+    - n_bootstrap: Bootstrap 迭代次數（預設 10）
     
     返回:
     - dict: 包含預測值、可信度、預測區間等資訊
@@ -495,7 +497,7 @@ def predict_stocks(input_file, model_dir='models/',
         
         # 計算可信度（如果啟用）
         if calculate_confidence and train_data is not None:
-            print(f"  計算可信度...")
+            print(f"  計算可信度（Bootstrap 10次）...")
             
             # 預處理訓練資料
             train_processed = preprocess_new_data(train_data, feature_columns)
@@ -511,7 +513,13 @@ def predict_stocks(input_file, model_dir='models/',
                 interval_lowers = []
                 interval_uppers = []
                 
-                for idx in range(len(X_scaled)):
+                total_items = len(X_scaled)
+                print(f"  處理 {total_items} 筆資料...")
+                
+                for idx in range(total_items):
+                    # 顯示進度
+                    print(f"    [{idx+1}/{total_items}] 計算中...", end='\r')
+                    
                     X_new_single = X_scaled[idx:idx+1]
                     
                     conf_result = predict_with_confidence(
@@ -520,13 +528,15 @@ def predict_stocks(input_file, model_dir='models/',
                         X_train=X_train,
                         y_train=y_train,
                         scaler=scaler,
-                        n_bootstrap=30
+                        n_bootstrap=10
                     )
                     
                     confidence_scores.append(conf_result['confidence_score'])
                     confidence_levels.append(conf_result['confidence_level'])
                     interval_lowers.append(conf_result['interval_95_lower'])
                     interval_uppers.append(conf_result['interval_95_upper'])
+                
+                print(f"    [{total_items}/{total_items}] 完成！" + " " * 20)
                 
                 # 加入可信度欄位
                 result[f'可信度_{target_column}'] = confidence_scores
