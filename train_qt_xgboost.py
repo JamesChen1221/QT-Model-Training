@@ -96,7 +96,23 @@ def extract_trend_features_from_120d(price_sequence_120d):
     """
     # 解析序列
     if pd.isna(price_sequence_120d):
-        return {f'slope_{i}': 0 for i in range(1, 16)}
+        return {
+            '120d_seg1_slope': 0,
+            '120d_seg2_slope': 0,
+            '120d_seg3_slope': 0,
+            '120d_seg4_slope': 0,
+            '120d_seg5_slope': 0,
+            '20d_seg1_slope': 0,
+            '20d_seg2_slope': 0,
+            '20d_seg3_slope': 0,
+            '20d_seg4_slope': 0,
+            '20d_seg5_slope': 0,
+            '5d_seg1_slope': 0,
+            '5d_seg2_slope': 0,
+            '5d_seg3_slope': 0,
+            '5d_seg4_slope': 0,
+            '5d_seg5_slope': 0
+        }
     
     if isinstance(price_sequence_120d, str):
         s = price_sequence_120d.strip('[]').strip()
@@ -106,7 +122,23 @@ def extract_trend_features_from_120d(price_sequence_120d):
     
     if len(prices) < 120:
         print(f"  ⚠ 警告: 序列長度不足 ({len(prices)} < 120)")
-        return {f'slope_{i}': 0 for i in range(1, 16)}
+        return {
+            '120d_seg1_slope': 0,
+            '120d_seg2_slope': 0,
+            '120d_seg3_slope': 0,
+            '120d_seg4_slope': 0,
+            '120d_seg5_slope': 0,
+            '20d_seg1_slope': 0,
+            '20d_seg2_slope': 0,
+            '20d_seg3_slope': 0,
+            '20d_seg4_slope': 0,
+            '20d_seg5_slope': 0,
+            '5d_seg1_slope': 0,
+            '5d_seg2_slope': 0,
+            '5d_seg3_slope': 0,
+            '5d_seg4_slope': 0,
+            '5d_seg5_slope': 0
+        }
     
     prices_array = np.array(prices)
     
@@ -201,6 +233,38 @@ class QTModelTrainer:
         print("步驟 2: 資料預處理")
         print("=" * 60)
         
+        # === 新增: 過濾序列長度不足的資料 ===
+        if '120天收盤價序列' in self.data.columns:
+            print(f"\n✓ 檢查 120天收盤價序列長度...")
+            
+            original_count = len(self.data)
+            invalid_indices = []
+            
+            for idx, row in self.data.iterrows():
+                if pd.isna(row['120天收盤價序列']):
+                    invalid_indices.append(idx)
+                    continue
+                
+                # 解析序列
+                if isinstance(row['120天收盤價序列'], str):
+                    s = row['120天收盤價序列'].strip('[]').strip()
+                    prices = [float(v.strip()) for v in s.split(',') if v.strip()]
+                else:
+                    prices = list(row['120天收盤價序列'])
+                
+                # 檢查長度
+                if len(prices) < 120:
+                    invalid_indices.append(idx)
+                    print(f"  ⚠ 過濾: {row['公司代碼']} (序列長度 {len(prices)} < 120)")
+            
+            # 移除無效資料
+            if invalid_indices:
+                self.data = self.data.drop(invalid_indices).reset_index(drop=True)
+                print(f"\n✓ 已過濾 {len(invalid_indices)} 筆序列長度不足的資料")
+                print(f"  原始: {original_count} 筆 → 保留: {len(self.data)} 筆")
+            else:
+                print(f"✓ 所有資料的序列長度都符合要求")
+        
         # 分離特徵和目標變數
         # 目標欄位: 以 '#' 開頭
         self.target_columns = [col for col in self.data.columns if str(col).startswith('#')]
@@ -269,6 +333,7 @@ class QTModelTrainer:
             self.feature_columns.extend(industry_dummies.columns.tolist())
             print(f"\n✓ 產業欄位已轉換為 One-Hot Encoding ({len(industry_dummies.columns)} 個類別)")
         
+
         # 處理缺失值
         # 特殊處理: 觸發類型 2 (消息面) 的財報欄位應該填 0，不是中位數
         financial_cols = ['EPS Surprise (%)', 'Revenue Surprise (%)', '展望 (Guidance)']
