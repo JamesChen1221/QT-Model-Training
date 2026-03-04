@@ -157,17 +157,36 @@ def preprocess_new_data(data, feature_columns):
         df = df.drop(columns=invalid_cols)
     
     # === 從 120天收盤價序列提取15個斜率特徵 ===
-    if '120天收盤價序列' in df.columns:
-        print(f"✓ 從 120天收盤價序列提取趨勢斜率特徵...")
+    # 尋找 120天收盤價序列欄位（可能是 '120天收盤價序列' 或 '*120天收盤價序列'）
+    sequence_col = None
+    for col in df.columns:
+        if '120天收盤價序列' in str(col):
+            sequence_col = col
+            break
+    
+    if sequence_col and not str(sequence_col).startswith('*'):
+        print(f"✓ 從 {sequence_col} 提取趨勢斜率特徵...")
         
         slope_features_list = []
         for idx, row in df.iterrows():
-            slope_features = extract_trend_features_from_120d(row['120天收盤價序列'])
+            slope_features = extract_trend_features_from_120d(row[sequence_col])
             slope_features_list.append(slope_features)
         
         slope_df = pd.DataFrame(slope_features_list)
         df = pd.concat([df, slope_df], axis=1)
         print(f"✓ 成功提取 {len(slope_df.columns)} 個趨勢斜率特徵")
+    elif sequence_col and str(sequence_col).startswith('*'):
+        print(f"⚠ 發現 {sequence_col}（以 * 開頭），跳過特徵提取")
+        print(f"  趨勢斜率特徵將全部設為 0")
+        
+        # 如果序列被忽略，需要手動創建斜率特徵（全部為0）
+        slope_feature_names = [
+            '120d_seg1_slope', '120d_seg2_slope', '120d_seg3_slope', '120d_seg4_slope', '120d_seg5_slope',
+            '20d_seg1_slope', '20d_seg2_slope', '20d_seg3_slope', '20d_seg4_slope', '20d_seg5_slope',
+            '5d_seg1_slope', '5d_seg2_slope', '5d_seg3_slope', '5d_seg4_slope', '5d_seg5_slope'
+        ]
+        for feat in slope_feature_names:
+            df[feat] = 0
     else:
         print(f"⚠ 警告: 找不到 '120天收盤價序列' 欄位")
         print(f"  趨勢斜率特徵將全部設為 0")
@@ -206,7 +225,8 @@ def preprocess_new_data(data, feature_columns):
                 # 觸發類型 2 的財報欄位填 0
                 mask_type2 = df['觸發類型'] == 2
                 if mask_type2.any():
-                    df.loc[mask_type2, col] = df.loc[mask_type2, col].fillna(0)
+                    mask_null = df[col].isnull() & mask_type2
+                    df.loc[mask_null, col] = 0
                     print(f"✓ 觸發類型 2 的 {col} 填 0")
                 
                 # 其他類型用中位數填補
@@ -215,7 +235,8 @@ def preprocess_new_data(data, feature_columns):
                     median_val = df.loc[mask_other, col].median()
                     if pd.isna(median_val):
                         median_val = 0
-                    df.loc[mask_other, col] = df.loc[mask_other, col].fillna(median_val)
+                    mask_null = df[col].isnull() & mask_other
+                    df.loc[mask_null, col] = median_val
     
     # 處理其他欄位的缺失值（用中位數）
     for col in feature_columns:
@@ -223,7 +244,7 @@ def preprocess_new_data(data, feature_columns):
             median_val = df[col].median()
             if pd.isna(median_val):
                 median_val = 0
-            df[col].fillna(median_val, inplace=True)
+            df[col] = df[col].fillna(median_val)
     
     # 4. 只保留訓練時使用的特徵，並按照相同順序
     # 注意: feature_columns 已經排除了 * 和 # 開頭的欄位
@@ -268,7 +289,7 @@ def calculate_confidence_score(prediction, interval_width, similarity_score, mod
     return confidence
 
 
-def predict_with_confidence(model, X_new, X_train, y_train, scaler, n_bootstrap=30):
+def predict_with_confidence(model, X_new, X_train, y_train, scaler, n_bootstrap=10):
     """
     預測並計算可信度
     
@@ -278,7 +299,7 @@ def predict_with_confidence(model, X_new, X_train, y_train, scaler, n_bootstrap=
     - X_train: 訓練資料特徵（未標準化）
     - y_train: 訓練資料目標
     - scaler: 標準化器
-    - n_bootstrap: Bootstrap 迭代次數（預設 30）
+    - n_bootstrap: Bootstrap 迭代次數（預設 10）
     
     返回:
     - dict: 包含預測值、可信度、預測區間等資訊
@@ -476,7 +497,7 @@ def predict_stocks(input_file, model_dir='models/',
         
         # 計算可信度（如果啟用）
         if calculate_confidence and train_data is not None:
-            print(f"  計算可信度...")
+            print(f"  計算可信度（Bootstrap 10次）...")
             
             # 預處理訓練資料
             train_processed = preprocess_new_data(train_data, feature_columns)
@@ -492,7 +513,13 @@ def predict_stocks(input_file, model_dir='models/',
                 interval_lowers = []
                 interval_uppers = []
                 
-                for idx in range(len(X_scaled)):
+                total_items = len(X_scaled)
+                print(f"  處理 {total_items} 筆資料...")
+                
+                for idx in range(total_items):
+                    # 顯示進度
+                    print(f"    [{idx+1}/{total_items}] 計算中...", end='\r')
+                    
                     X_new_single = X_scaled[idx:idx+1]
                     
                     conf_result = predict_with_confidence(
@@ -501,13 +528,15 @@ def predict_stocks(input_file, model_dir='models/',
                         X_train=X_train,
                         y_train=y_train,
                         scaler=scaler,
-                        n_bootstrap=30
+                        n_bootstrap=10
                     )
                     
                     confidence_scores.append(conf_result['confidence_score'])
                     confidence_levels.append(conf_result['confidence_level'])
                     interval_lowers.append(conf_result['interval_95_lower'])
                     interval_uppers.append(conf_result['interval_95_upper'])
+                
+                print(f"    [{total_items}/{total_items}] 完成！" + " " * 20)
                 
                 # 加入可信度欄位
                 result[f'可信度_{target_column}'] = confidence_scores
@@ -709,19 +738,6 @@ def main():
         training_data_file=args.training_data
     )
     
-    if result is not None:
-        print(f"\n提示:")
-        print(f"- 查看完整結果: {args.output}")
-        print(f"- 預測值越高，當沖潛力越大")
-        print(f"- 建議關注各項預測值較高的股票")
-        
-        if args.confidence:
-            print(f"\n可信度使用建議:")
-            print(f"- 高可信度（> 0.7）: 可以採取行動")
-            print(f"- 中等可信度（0.4-0.7）: 謹慎評估，結合其他分析")
-            print(f"- 低可信度（< 0.4）: 建議觀望")
-            print(f"- 注意: 資料量少時（< 100筆），所有預測的可信度都會偏低")
-
 
 if __name__ == "__main__":
     main()

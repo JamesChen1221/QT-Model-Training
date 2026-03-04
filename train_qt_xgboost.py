@@ -96,7 +96,23 @@ def extract_trend_features_from_120d(price_sequence_120d):
     """
     # 解析序列
     if pd.isna(price_sequence_120d):
-        return {f'slope_{i}': 0 for i in range(1, 16)}
+        return {
+            '120d_seg1_slope': 0,
+            '120d_seg2_slope': 0,
+            '120d_seg3_slope': 0,
+            '120d_seg4_slope': 0,
+            '120d_seg5_slope': 0,
+            '20d_seg1_slope': 0,
+            '20d_seg2_slope': 0,
+            '20d_seg3_slope': 0,
+            '20d_seg4_slope': 0,
+            '20d_seg5_slope': 0,
+            '5d_seg1_slope': 0,
+            '5d_seg2_slope': 0,
+            '5d_seg3_slope': 0,
+            '5d_seg4_slope': 0,
+            '5d_seg5_slope': 0
+        }
     
     if isinstance(price_sequence_120d, str):
         s = price_sequence_120d.strip('[]').strip()
@@ -106,7 +122,23 @@ def extract_trend_features_from_120d(price_sequence_120d):
     
     if len(prices) < 120:
         print(f"  ⚠ 警告: 序列長度不足 ({len(prices)} < 120)")
-        return {f'slope_{i}': 0 for i in range(1, 16)}
+        return {
+            '120d_seg1_slope': 0,
+            '120d_seg2_slope': 0,
+            '120d_seg3_slope': 0,
+            '120d_seg4_slope': 0,
+            '120d_seg5_slope': 0,
+            '20d_seg1_slope': 0,
+            '20d_seg2_slope': 0,
+            '20d_seg3_slope': 0,
+            '20d_seg4_slope': 0,
+            '20d_seg5_slope': 0,
+            '5d_seg1_slope': 0,
+            '5d_seg2_slope': 0,
+            '5d_seg3_slope': 0,
+            '5d_seg4_slope': 0,
+            '5d_seg5_slope': 0
+        }
     
     prices_array = np.array(prices)
     
@@ -204,6 +236,47 @@ class QTModelTrainer:
         print("步驟 2: 資料預處理")
         print("=" * 60)
         
+        # === 新增: 過濾序列長度不足的資料 ===
+        # 尋找 120天收盤價序列欄位（可能是 '120天收盤價序列' 或 '*120天收盤價序列'）
+        sequence_col = None
+        for col in self.data.columns:
+            if '120天收盤價序列' in str(col):
+                sequence_col = col
+                break
+        
+        if sequence_col and not str(sequence_col).startswith('*'):
+            print(f"\n✓ 檢查 {sequence_col} 長度...")
+            
+            original_count = len(self.data)
+            invalid_indices = []
+            
+            for idx, row in self.data.iterrows():
+                if pd.isna(row[sequence_col]):
+                    invalid_indices.append(idx)
+                    continue
+                
+                # 解析序列
+                if isinstance(row[sequence_col], str):
+                    s = row[sequence_col].strip('[]').strip()
+                    prices = [float(v.strip()) for v in s.split(',') if v.strip()]
+                else:
+                    prices = list(row[sequence_col])
+                
+                # 檢查長度
+                if len(prices) < 120:
+                    invalid_indices.append(idx)
+                    print(f"  ⚠ 過濾: {row['公司代碼']} (序列長度 {len(prices)} < 120)")
+            
+            # 移除無效資料
+            if invalid_indices:
+                self.data = self.data.drop(invalid_indices).reset_index(drop=True)
+                print(f"\n✓ 已過濾 {len(invalid_indices)} 筆序列長度不足的資料")
+                print(f"  原始: {original_count} 筆 → 保留: {len(self.data)} 筆")
+            else:
+                print(f"✓ 所有資料的序列長度都符合要求")
+        elif sequence_col and str(sequence_col).startswith('*'):
+            print(f"\n⚠ 發現 {sequence_col}（以 * 開頭），將忽略此欄位")
+        
         # 分離特徵和目標變數
         # 目標欄位: 以 '#' 開頭
         self.target_columns = [col for col in self.data.columns if str(col).startswith('#')]
@@ -222,8 +295,15 @@ class QTModelTrainer:
         print(f"\n目標變數: {', '.join(self.target_columns)}")
         
         # === 新增: 從 120天收盤價序列提取15個斜率特徵 ===
-        if '120天收盤價序列' in self.data.columns:
-            print(f"\n✓ 發現 120天收盤價序列，開始提取趨勢斜率特徵...")
+        # 尋找 120天收盤價序列欄位（可能是 '120天收盤價序列' 或 '*120天收盤價序列'）
+        sequence_col = None
+        for col in self.data.columns:
+            if '120天收盤價序列' in str(col):
+                sequence_col = col
+                break
+        
+        if sequence_col and not str(sequence_col).startswith('*'):
+            print(f"\n✓ 發現 {sequence_col}，開始提取趨勢斜率特徵...")
             
             # 顯示提取結果
             print("\n" + "-" * 60)
@@ -235,7 +315,7 @@ class QTModelTrainer:
                 print(f"\n記錄 {idx + 1} ({row['公司代碼']}):")
                 
                 # 提取15個斜率特徵
-                slope_features = extract_trend_features_from_120d(row['120天收盤價序列'])
+                slope_features = extract_trend_features_from_120d(row[sequence_col])
                 slope_features_list.append(slope_features)
                 
                 # 顯示提取的特徵
@@ -261,6 +341,8 @@ class QTModelTrainer:
             print("\n" + "-" * 60)
             print(f"✓ 成功提取 {len(slope_df.columns)} 個趨勢斜率特徵")
             print("-" * 60)
+        elif sequence_col and str(sequence_col).startswith('*'):
+            print(f"\n⚠ 發現 {sequence_col}（以 * 開頭），跳過特徵提取")
         else:
             print("\n⚠ 警告: 找不到 '120天收盤價序列' 欄位")
         
@@ -272,6 +354,7 @@ class QTModelTrainer:
             self.feature_columns.extend(industry_dummies.columns.tolist())
             print(f"\n✓ 產業欄位已轉換為 One-Hot Encoding ({len(industry_dummies.columns)} 個類別)")
         
+
         # 處理缺失值
         # 特殊處理: 觸發類型 2 (消息面) 的財報欄位應該填 0，不是中位數
         financial_cols = ['EPS Surprise (%)', 'Revenue Surprise (%)', '展望 (Guidance)']
@@ -533,13 +616,18 @@ class QTModelTrainer:
         
         fig, axes = plt.subplots(2, 2, figsize=(14, 10))
         
-        # 1. 特徵重要性（前10名）
-        top_features = self.feature_importance.head(10)
+        # 1. 特徵重要性（前10名，排除「盤前 (%)」）
+        # 排除「盤前 (%)」以便更清楚看到其他特徵的差異
+        features_without_premarket = self.feature_importance[
+            self.feature_importance['特徵'] != '盤前 (%)'
+        ]
+        top_features = features_without_premarket.head(10)
+        
         axes[0, 0].barh(range(len(top_features)), top_features['重要性'])
         axes[0, 0].set_yticks(range(len(top_features)))
         axes[0, 0].set_yticklabels(top_features['特徵'])
         axes[0, 0].set_xlabel('重要性分數')
-        axes[0, 0].set_title('特徵重要性排名（前10名）', fontweight='bold')
+        axes[0, 0].set_title('特徵重要性排名（前10名，已排除盤前%）', fontweight='bold')
         axes[0, 0].invert_yaxis()
         
         if self.use_cv:
@@ -641,10 +729,70 @@ class QTModelTrainer:
         
         return self
     
+    def retrain_with_all_data(self, target_column):
+        """用全部資料重新訓練最終模型"""
+        print("\n" + "=" * 60)
+        print(f"步驟 6.5: 用全部資料重新訓練最終模型 - {target_column}")
+        print("=" * 60)
+        
+        # 準備全部資料
+        X_all = self.data[self.feature_columns].values
+        y_all = self.data[target_column].values
+        
+        print(f"✓ 使用全部資料: {len(X_all)} 筆")
+        print(f"  （之前評估時只用了 {len(self.X_train)} 筆訓練）")
+        
+        # 標準化全部資料
+        scaler_final = StandardScaler()
+        X_all_scaled = scaler_final.fit_transform(X_all)
+        
+        # 用相同參數建立新模型
+        final_model = xgb.XGBRegressor(
+            n_estimators=self.model.n_estimators,
+            max_depth=self.model.max_depth,
+            learning_rate=self.model.learning_rate,
+            objective='reg:squarederror',
+            random_state=42,
+            verbosity=0
+        )
+        
+        print(f"\n開始訓練最終模型...")
+        print("-" * 60)
+        
+        # 訓練最終模型
+        final_model.fit(X_all_scaled, y_all, verbose=False)
+        
+        print("-" * 60)
+        print("✓ 最終模型訓練完成！")
+        
+        # 更新模型和標準化器（用於儲存）
+        self.model = final_model
+        self.scaler = scaler_final
+        
+        # 更新特徵重要性
+        self.feature_importance = pd.DataFrame({
+            '特徵': self.feature_columns,
+            '重要性': self.model.feature_importances_
+        }).sort_values('重要性', ascending=False)
+        
+        # 顯示最終模型在全部資料上的表現
+        y_all_pred = final_model.predict(X_all_scaled)
+        final_rmse = np.sqrt(mean_squared_error(y_all, y_all_pred))
+        final_mae = mean_absolute_error(y_all, y_all_pred)
+        final_r2 = r2_score(y_all, y_all_pred)
+        
+        print(f"\n✓ 最終模型在全部資料上的表現:")
+        print(f"  - RMSE: {final_rmse:.4f}")
+        print(f"  - MAE: {final_mae:.4f}")
+        print(f"  - R² Score: {final_r2:.4f}")
+        print(f"\n  註: 這是訓練集表現，實際泛化表現請參考步驟 5 的測試集結果")
+        
+        return self
+    
     def save_model(self, target_column, model_path='models/qt_xgboost_model.pkl'):
         """儲存模型"""
         print("\n" + "=" * 60)
-        print(f"步驟 7: 儲存模型 - {target_column}")
+        print(f"步驟 7: 儲存最終模型 - {target_column}")
         print("=" * 60)
         
         Path(model_path).parent.mkdir(parents=True, exist_ok=True)
@@ -668,8 +816,89 @@ class QTModelTrainer:
         # 儲存模型和相關資訊
         joblib.dump(save_data, model_path)
         
-        print(f"✓ 模型已儲存至: {model_path}")
+        print(f"✓ 最終模型已儲存至: {model_path}")
+        print(f"  （此模型使用全部 {len(self.data)} 筆資料訓練）")
         
+        return self
+    def retrain_with_all_data(self, target_column):
+        """用全部資料重新訓練最終模型"""
+        print("\n" + "=" * 60)
+        print(f"步驟 6.5: 用全部資料重新訓練最終模型 - {target_column}")
+        print("=" * 60)
+
+        # 準備全部資料
+        X_all = self.data[self.feature_columns].values
+        y_all = self.data[target_column].values
+
+        print(f"✓ 使用全部資料: {len(X_all)} 筆")
+        print(f"  （之前只用了 {len(self.X_train)} 筆訓練）")
+
+        # 標準化全部資料
+        scaler_final = StandardScaler()
+        X_all_scaled = scaler_final.fit_transform(X_all)
+
+        # 用相同參數建立新模型
+        final_model = xgb.XGBRegressor(
+            n_estimators=self.model.n_estimators,
+            max_depth=self.model.max_depth,
+            learning_rate=self.model.learning_rate,
+            objective='reg:squarederror',
+            random_state=42,
+            verbosity=0
+        )
+
+        print(f"\n開始訓練最終模型...")
+        print("-" * 60)
+
+        # 訓練最終模型
+        final_model.fit(X_all_scaled, y_all, verbose=False)
+
+        print("-" * 60)
+        print("✓ 最終模型訓練完成！")
+
+        # 更新模型和標準化器（用於儲存）
+        self.model = final_model
+        self.scaler = scaler_final
+
+        # 更新特徵重要性
+        self.feature_importance = pd.DataFrame({
+            '特徵': self.feature_columns,
+            '重要性': self.model.feature_importances_
+        }).sort_values('重要性', ascending=False)
+
+        # 顯示最終模型在全部資料上的表現
+        y_all_pred = final_model.predict(X_all_scaled)
+        final_rmse = np.sqrt(mean_squared_error(y_all, y_all_pred))
+        final_mae = mean_absolute_error(y_all, y_all_pred)
+        final_r2 = r2_score(y_all, y_all_pred)
+
+        print(f"\n✓ 最終模型在全部資料上的表現:")
+        print(f"  - RMSE: {final_rmse:.4f}")
+        print(f"  - MAE: {final_mae:.4f}")
+        print(f"  - R² Score: {final_r2:.4f}")
+        print(f"\n  註: 這是訓練集表現，實際泛化表現請參考步驟 5 的測試集結果")
+
+        return self
+
+    def save_model(self, target_column, model_path='models/qt_xgboost_model.pkl'):
+        """儲存模型"""
+        print("\n" + "=" * 60)
+        print(f"步驟 7: 儲存模型 - {target_column}")
+        print("=" * 60)
+
+        Path(model_path).parent.mkdir(parents=True, exist_ok=True)
+
+        # 儲存模型和相關資訊
+        joblib.dump({
+            'model': self.model,
+            'scaler': self.scaler,
+            'feature_columns': self.feature_columns,
+            'target_column': target_column,
+            'feature_importance': self.feature_importance
+        }, model_path)
+
+        print(f"✓ 模型已儲存至: {model_path}")
+
         return self
 
 
@@ -689,6 +918,7 @@ def train_single_target(trainer, target_column, model_index):
            .build_and_train_model(n_estimators=100, max_depth=5, learning_rate=0.1)\
            .evaluate_model()\
            .plot_results(save_path=plot_path)\
+           .retrain_with_all_data(target_column=target_column)\
            .save_model(target_column=target_column, model_path=model_path)
     
     return model_path
