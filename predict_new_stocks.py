@@ -157,17 +157,36 @@ def preprocess_new_data(data, feature_columns):
         df = df.drop(columns=invalid_cols)
     
     # === 從 120天收盤價序列提取15個斜率特徵 ===
-    if '120天收盤價序列' in df.columns:
-        print(f"✓ 從 120天收盤價序列提取趨勢斜率特徵...")
+    # 尋找 120天收盤價序列欄位（可能是 '120天收盤價序列' 或 '*120天收盤價序列'）
+    sequence_col = None
+    for col in df.columns:
+        if '120天收盤價序列' in str(col):
+            sequence_col = col
+            break
+    
+    if sequence_col and not str(sequence_col).startswith('*'):
+        print(f"✓ 從 {sequence_col} 提取趨勢斜率特徵...")
         
         slope_features_list = []
         for idx, row in df.iterrows():
-            slope_features = extract_trend_features_from_120d(row['120天收盤價序列'])
+            slope_features = extract_trend_features_from_120d(row[sequence_col])
             slope_features_list.append(slope_features)
         
         slope_df = pd.DataFrame(slope_features_list)
         df = pd.concat([df, slope_df], axis=1)
         print(f"✓ 成功提取 {len(slope_df.columns)} 個趨勢斜率特徵")
+    elif sequence_col and str(sequence_col).startswith('*'):
+        print(f"⚠ 發現 {sequence_col}（以 * 開頭），跳過特徵提取")
+        print(f"  趨勢斜率特徵將全部設為 0")
+        
+        # 如果序列被忽略，需要手動創建斜率特徵（全部為0）
+        slope_feature_names = [
+            '120d_seg1_slope', '120d_seg2_slope', '120d_seg3_slope', '120d_seg4_slope', '120d_seg5_slope',
+            '20d_seg1_slope', '20d_seg2_slope', '20d_seg3_slope', '20d_seg4_slope', '20d_seg5_slope',
+            '5d_seg1_slope', '5d_seg2_slope', '5d_seg3_slope', '5d_seg4_slope', '5d_seg5_slope'
+        ]
+        for feat in slope_feature_names:
+            df[feat] = 0
     else:
         print(f"⚠ 警告: 找不到 '120天收盤價序列' 欄位")
         print(f"  趨勢斜率特徵將全部設為 0")

@@ -234,23 +234,30 @@ class QTModelTrainer:
         print("=" * 60)
         
         # === 新增: 過濾序列長度不足的資料 ===
-        if '120天收盤價序列' in self.data.columns:
-            print(f"\n✓ 檢查 120天收盤價序列長度...")
+        # 尋找 120天收盤價序列欄位（可能是 '120天收盤價序列' 或 '*120天收盤價序列'）
+        sequence_col = None
+        for col in self.data.columns:
+            if '120天收盤價序列' in str(col):
+                sequence_col = col
+                break
+        
+        if sequence_col and not str(sequence_col).startswith('*'):
+            print(f"\n✓ 檢查 {sequence_col} 長度...")
             
             original_count = len(self.data)
             invalid_indices = []
             
             for idx, row in self.data.iterrows():
-                if pd.isna(row['120天收盤價序列']):
+                if pd.isna(row[sequence_col]):
                     invalid_indices.append(idx)
                     continue
                 
                 # 解析序列
-                if isinstance(row['120天收盤價序列'], str):
-                    s = row['120天收盤價序列'].strip('[]').strip()
+                if isinstance(row[sequence_col], str):
+                    s = row[sequence_col].strip('[]').strip()
                     prices = [float(v.strip()) for v in s.split(',') if v.strip()]
                 else:
-                    prices = list(row['120天收盤價序列'])
+                    prices = list(row[sequence_col])
                 
                 # 檢查長度
                 if len(prices) < 120:
@@ -264,6 +271,8 @@ class QTModelTrainer:
                 print(f"  原始: {original_count} 筆 → 保留: {len(self.data)} 筆")
             else:
                 print(f"✓ 所有資料的序列長度都符合要求")
+        elif sequence_col and str(sequence_col).startswith('*'):
+            print(f"\n⚠ 發現 {sequence_col}（以 * 開頭），將忽略此欄位")
         
         # 分離特徵和目標變數
         # 目標欄位: 以 '#' 開頭
@@ -283,8 +292,15 @@ class QTModelTrainer:
         print(f"\n目標變數: {', '.join(self.target_columns)}")
         
         # === 新增: 從 120天收盤價序列提取15個斜率特徵 ===
-        if '120天收盤價序列' in self.data.columns:
-            print(f"\n✓ 發現 120天收盤價序列，開始提取趨勢斜率特徵...")
+        # 尋找 120天收盤價序列欄位（可能是 '120天收盤價序列' 或 '*120天收盤價序列'）
+        sequence_col = None
+        for col in self.data.columns:
+            if '120天收盤價序列' in str(col):
+                sequence_col = col
+                break
+        
+        if sequence_col and not str(sequence_col).startswith('*'):
+            print(f"\n✓ 發現 {sequence_col}，開始提取趨勢斜率特徵...")
             
             # 顯示提取結果
             print("\n" + "-" * 60)
@@ -296,7 +312,7 @@ class QTModelTrainer:
                 print(f"\n記錄 {idx + 1} ({row['公司代碼']}):")
                 
                 # 提取15個斜率特徵
-                slope_features = extract_trend_features_from_120d(row['120天收盤價序列'])
+                slope_features = extract_trend_features_from_120d(row[sequence_col])
                 slope_features_list.append(slope_features)
                 
                 # 顯示提取的特徵
@@ -322,6 +338,8 @@ class QTModelTrainer:
             print("\n" + "-" * 60)
             print(f"✓ 成功提取 {len(slope_df.columns)} 個趨勢斜率特徵")
             print("-" * 60)
+        elif sequence_col and str(sequence_col).startswith('*'):
+            print(f"\n⚠ 發現 {sequence_col}（以 * 開頭），跳過特徵提取")
         else:
             print("\n⚠ 警告: 找不到 '120天收盤價序列' 欄位")
         
