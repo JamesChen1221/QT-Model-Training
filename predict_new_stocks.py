@@ -738,19 +738,6 @@ def main():
         training_data_file=args.training_data
     )
     
-    if result is not None:
-        print(f"\n提示:")
-        print(f"- 查看完整結果: {args.output}")
-        print(f"- 預測值越高，當沖潛力越大")
-        print(f"- 建議關注各項預測值較高的股票")
-        
-        if args.confidence:
-            print(f"\n可信度使用建議:")
-            print(f"- 高可信度（> 0.7）: 可以採取行動")
-            print(f"- 中等可信度（0.4-0.7）: 謹慎評估，結合其他分析")
-            print(f"- 低可信度（< 0.4）: 建議觀望")
-            print(f"- 注意: 資料量少時（< 100筆），所有預測的可信度都會偏低")
-
 
 if __name__ == "__main__":
     main()
