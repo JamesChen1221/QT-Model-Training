@@ -510,13 +510,18 @@ class QTModelTrainer:
         
         fig, axes = plt.subplots(2, 2, figsize=(14, 10))
         
-        # 1. 特徵重要性（前10名）
-        top_features = self.feature_importance.head(10)
+        # 1. 特徵重要性（前10名，排除「盤前 (%)」）
+        # 排除「盤前 (%)」以便更清楚看到其他特徵的差異
+        features_without_premarket = self.feature_importance[
+            self.feature_importance['特徵'] != '盤前 (%)'
+        ]
+        top_features = features_without_premarket.head(10)
+        
         axes[0, 0].barh(range(len(top_features)), top_features['重要性'])
         axes[0, 0].set_yticks(range(len(top_features)))
         axes[0, 0].set_yticklabels(top_features['特徵'])
         axes[0, 0].set_xlabel('重要性分數')
-        axes[0, 0].set_title('特徵重要性排名（前10名）', fontweight='bold')
+        axes[0, 0].set_title('特徵重要性排名（前10名，已排除盤前%）', fontweight='bold')
         axes[0, 0].invert_yaxis()
         
         # 2. 預測 vs 實際（測試集）
