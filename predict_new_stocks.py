@@ -150,10 +150,13 @@ def preprocess_new_data(data, feature_columns):
     
     print("\n資料預處理...")
     
-    # 0. 移除無效欄位（空白或數字欄位名）
-    invalid_cols = [col for col in df.columns if isinstance(col, (int, float)) or str(col).strip() == '']
+    # 0. 移除無效欄位（空白、數字欄位名、Unnamed 欄位）
+    invalid_cols = [col for col in df.columns 
+                   if isinstance(col, (int, float)) 
+                   or str(col).strip() == '' 
+                   or str(col).startswith('Unnamed:')]
     if invalid_cols:
-        print(f"✓ 移除無效欄位: {invalid_cols}")
+        print(f"✓ 移除 {len(invalid_cols)} 個無效欄位")
         df = df.drop(columns=invalid_cols)
     
     # === 從 120天收盤價序列提取15個斜率特徵 ===
@@ -307,14 +310,33 @@ def predict_with_confidence(model, X_new, X_train, y_train, scaler, n_bootstrap=
     # 1. 基本預測
     prediction = model.predict(X_new)[0]
     
+    # 1.5. 過濾訓練資料中的 NaN 值
+    valid_mask = ~np.isnan(y_train)
+    X_train_valid = X_train[valid_mask]
+    y_train_valid = y_train[valid_mask]
+    
+    if len(y_train_valid) < 10:
+        # 如果有效資料太少，返回低可信度
+        return {
+            'prediction': prediction,
+            'mean_prediction': prediction,
+            'confidence_score': 0.1,
+            'confidence_level': "低",
+            'interval_95_lower': prediction - 10,
+            'interval_95_upper': prediction + 10,
+            'interval_width': 20,
+            'std': 10,
+            'similarity': 0.5
+        }
+    
     # 2. Bootstrap 估計不確定性
     predictions = []
     
     for i in range(n_bootstrap):
         # 重採樣訓練資料
-        indices = np.random.choice(len(X_train), len(X_train), replace=True)
-        X_boot = X_train[indices]
-        y_boot = y_train[indices]
+        indices = np.random.choice(len(X_train_valid), len(X_train_valid), replace=True)
+        X_boot = X_train_valid[indices]
+        y_boot = y_train_valid[indices]
         
         # 標準化
         X_boot_scaled = scaler.transform(X_boot)
@@ -345,19 +367,19 @@ def predict_with_confidence(model, X_new, X_train, y_train, scaler, n_bootstrap=
     # 4. 計算相似度（與訓練資料的相似程度）
     # 使用標準化後的資料計算距離
     # 先填補 NaN 值（用 0 填補，因為已經標準化）
-    X_train_filled = np.nan_to_num(X_train, nan=0.0)
-    X_train_scaled = scaler.transform(X_train_filled)
+    X_train_valid_filled = np.nan_to_num(X_train_valid, nan=0.0)
+    X_train_valid_scaled = scaler.transform(X_train_valid_filled)
     
     # 確保沒有 NaN 或 inf
-    X_train_scaled = np.nan_to_num(X_train_scaled, nan=0.0, posinf=0.0, neginf=0.0)
+    X_train_valid_scaled = np.nan_to_num(X_train_valid_scaled, nan=0.0, posinf=0.0, neginf=0.0)
     
-    nn = NearestNeighbors(n_neighbors=min(5, len(X_train)))
-    nn.fit(X_train_scaled)
+    nn = NearestNeighbors(n_neighbors=min(5, len(X_train_valid)))
+    nn.fit(X_train_valid_scaled)
     distances, _ = nn.kneighbors(X_new)
     avg_distance = distances.mean()
     
     # 標準化距離（0-1）
-    max_distance = np.linalg.norm(X_train_scaled.max(axis=0) - X_train_scaled.min(axis=0))
+    max_distance = np.linalg.norm(X_train_valid_scaled.max(axis=0) - X_train_valid_scaled.min(axis=0))
     if max_distance > 0:
         similarity_score = max(0, 1 - (avg_distance / max_distance))
     else:
