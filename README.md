@@ -1,413 +1,247 @@
-# QT 當沖潛力預測系統
+# QT Model Training
 
-使用 XGBoost 機器學習模型預測股票的當沖潛力，支援多目標預測。
+This is a small side project focused on predicting intraday trading potential for individual stocks, using data from the QT data collecting project. Given a set of pre-market features, the system predicts four key price targets within the first 1.5 hours of trading.
 
 ---
 
-## 🚀 快速開始
+## Purpose
 
-### 0. 準備資料
+The goal is to build a lightweight, practical prediction system that can assist in identifying high-potential stocks for intraday trading before market open. The system predicts:
 
-**重要**：Excel 資料檔案未包含在此倉庫中，你需要自行準備。
+- **Opening change** `#開盤 (%)` — how much the stock gaps up/down at open
+- **10-minute low** `#10分鐘低價 (%)` — the lowest point in the first 10 minutes
+- **0.5-hour high** `#0.5小時最高價 (%)` — the highest point in the first 30 minutes
+- **1.5-hour high** `#1.5小時高價 (%)` — the highest point in the first 90 minutes
 
-1. 準備訓練資料：`data/QT Training Data.xlsx`
-2. 準備預測資料：`data/Stock TBP.xlsx`
+---
 
-詳細資料格式請參考 `data/README.md`
+## Development Approach
 
-### 1. 安裝依賴
+### Machine Learning
+
+- **Algorithm**: XGBoost (gradient boosted trees) — chosen for its strong performance on small tabular datasets and compatibility with Python 3.14
+- **Architecture**: 4 independent regression models, one per prediction target
+- **Training strategy**: 80/20 train/test split for evaluation, then retrain on full dataset for the final saved model
+- **Confidence estimation**: Bootstrap resampling (10 iterations) to estimate prediction uncertainty
+
+### Feature Engineering
+
+Features are extracted from the Excel training data and include:
+
+- Price distance indicators (5-day, 1-month, 6-month highs/lows)
+- Pre-market change percentage
+- Earnings surprise metrics (EPS, Revenue, Guidance)
+- Industry encoding (One-Hot)
+- 15 trend slope features extracted from a 120-day closing price sequence (5-day, 20-day, 120-day windows, 5 segments each)
+- Average daily trading volume (past 20 days) as a liquidity proxy
+
+### AI-Assisted Development
+
+This project was developed with the assistance of **Kiro** (an AI-powered development environment). AI was used throughout the development process, including:
+
+- Designing the feature engineering pipeline
+- Debugging data preprocessing issues
+- Implementing the Bootstrap confidence scoring system
+- Identifying and resolving edge cases (e.g., NaN filtering, Pandas Copy-on-Write warnings, detached HEAD git state)
+- Writing documentation and analysis
+
+---
+
+## Requirements
+
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. 訓練模型
-```bash
-# 方法 1: 使用批次檔（推薦）
-雙擊 快速訓練.bat
-
-# 方法 2: 使用命令列
-python train_qt_xgboost.py
-```
-
-### 3. 預測新股票
-```bash
-# 方法 1: 使用批次檔（推薦）
-雙擊 快速預測.bat
-
-# 方法 2: 使用命令列
-python predict_new_stocks.py --input "data/Stock TBP.xlsx"
-
-# 方法 3: 預測並計算可信度（需要較長時間，約 2-5 分鐘）
-雙擊 快速預測_含可信度.bat
-
-# 或使用命令列
-python predict_new_stocks.py --input "data/Stock TBP.xlsx" --confidence
-```
-
-### 4. 可信度說明
-
-可信度分數（0-1）反映模型對預測結果的確定程度：
-
-- **高可信度（> 0.7）**: 可以信賴預測結果，建議採取行動
-- **中等可信度（0.4-0.7）**: 謹慎評估，建議結合其他分析方法
-- **低可信度（< 0.4）**: 預測不確定性高，建議觀望
-
-可信度計算包含：
-- **預測區間**：95% 信賴區間的寬度（區間越窄越可信）
-- **資料相似度**：新資料與訓練資料的相似程度
-- **模型一致性**：Bootstrap 重採樣的預測穩定性
-
-**注意**：資料量少時（< 100 筆），所有預測的可信度都會偏低。
+**Key dependencies**: Python 3.8+, XGBoost, pandas, numpy, scikit-learn, matplotlib, openpyxl
 
 ---
 
-## 📁 專案結構
+## Usage
+
+### Step 1 — Prepare Data
+
+The Excel data files are not included in this repository (excluded via `.gitignore`). You need to provide your own:
+
+- `data/QT Training Data.xlsx` — historical training data
+- `data/Stock TBP.xlsx` — stocks to predict
+
+See [Data Format](#data-format) below for the required structure.
+
+### Step 2 — Train Models
+
+```bash
+# Using batch file (Windows)
+快速訓練.bat
+
+# Or via command line
+python train_qt_xgboost.py
+```
+
+This trains 4 models and saves them to `models/`. Training results and feature importance charts are saved as `models/training_results_*.png`.
+
+### Step 3 — Predict
+
+```bash
+# Basic prediction (fast, a few seconds)
+快速預測.bat
+
+# Or via command line
+python predict_new_stocks.py --input "data/Stock TBP.xlsx"
+```
+
+```bash
+# Prediction with confidence scores (slower, ~2–5 min depending on data size)
+快速預測_含可信度.bat
+
+# Or via command line
+python predict_new_stocks.py --input "data/Stock TBP.xlsx" --confidence
+```
+
+Results are saved to `data/new_predictions.csv`.
+
+---
+
+## Data Format
+
+### Column Naming Convention
+
+Columns in the Excel file use prefixes to indicate their role:
+
+| Prefix | Role | Example |
+|--------|------|---------|
+| *(none)* | Feature used for training | `5日高價距離 (%)` |
+| `#` | Prediction target (label) | `#開盤 (%)` |
+| `*` | Ignored column | `*備註` |
+
+### Training Data (`QT Training Data.xlsx`)
+
+**Required feature columns:**
+
+| Column | Description |
+|--------|-------------|
+| `開盤日期` | Trading date |
+| `公司代碼` | Stock ticker |
+| `產業` | Industry code (integer) |
+| `5日高價距離 (%)` | Distance from 5-day high |
+| `5日低價距離 (%)` | Distance from 5-day low |
+| `1個月高價距離 (%)` | Distance from 1-month high |
+| `1個月低價距離 (%)` | Distance from 1-month low |
+| `6個月高價距離 (%)` | Distance from 6-month high |
+| `6個月低價距離 (%)` | Distance from 6-month low |
+| `盤前 (%)` | Pre-market change % |
+| `EPS Surprise (%)` | Earnings per share surprise |
+| `Revenue Surprise (%)` | Revenue surprise |
+| `展望 (Guidance)` | Forward guidance (1=raised, 0=neutral, -1=lowered) |
+| `過去 20 天平均交易金額` | Average daily trading value, past 20 days |
+| `120天收盤價序列` | 120-day closing price sequence, format: `[100.5, 102.3, ...]` |
+
+**Target label columns (prefix `#`):**
+
+| Column | Description |
+|--------|-------------|
+| `#開盤 (%)` | Opening change % |
+| `#10分鐘低價 (%)` | 10-minute low % |
+| `#0.5小時最高價 (%)` | 30-minute high % |
+| `#1.5小時高價 (%)` | 90-minute high % |
+
+### Prediction Data (`Stock TBP.xlsx`)
+
+Same structure as training data, but **without** the `#` target columns.
+
+---
+
+## Output
+
+### Basic Prediction
+
+```
+開盤日期    公司代碼  預測_#開盤 (%)  預測_#10分鐘低價 (%)  預測_#0.5小時最高價 (%)  預測_#1.5小時高價 (%)
+2026-03-05  NVDA       4.58            2.35                  8.11                    8.97
+2026-03-05  AAPL       1.48           -1.27                  1.41                    0.62
+```
+
+### With Confidence Scores
+
+Additional columns are appended:
+
+| Column | Description |
+|--------|-------------|
+| `可信度_#開盤 (%)` | Confidence score (0–1) |
+
+**Confidence levels:**
+
+| Level | Score | Recommendation |
+|-------|-------|----------------|
+| High (高) | > 0.7 | Reliable — consider acting |
+| Medium (中) | 0.4–0.7 | Use with caution, combine with other analysis |
+| Low (低) | < 0.4 | High uncertainty — stand aside |
+
+Confidence is calculated from three components:
+- **Prediction interval width** (Bootstrap 95% CI)
+- **Data similarity** (nearest-neighbor distance to training set)
+- **Model consistency** (standard deviation across Bootstrap iterations)
+
+---
+
+## Project Structure
 
 ```
 QT Model Training/
 ├── data/
-│   ├── QT Training Data.xlsx       # 訓練資料（含120天收盤價序列）
-│   ├── Stock TBP.xlsx              # 待預測股票資料
-│   └── new_predictions.csv         # 預測結果（自動生成）
+│   ├── QT Training Data.xlsx       # Training data (not in repo)
+│   ├── Stock TBP.xlsx              # Stocks to predict (not in repo)
+│   └── new_predictions.csv         # Prediction output (auto-generated)
 │
 ├── models/
-│   ├── qt_model_開盤_pct.pkl                    # 開盤漲幅預測模型
-│   ├── qt_model_10分鐘低價_pct.pkl              # 10分鐘低價預測模型
-│   ├── qt_model_0.5小時最高價_pct.pkl           # 0.5小時最高價預測模型
-│   ├── qt_model_1.5小時高價_pct.pkl             # 1.5小時高價預測模型
-│   └── training_results_*.png                  # 訓練結果圖表
+│   ├── qt_model_開盤_pct.pkl
+│   ├── qt_model_10分鐘低價_pct.pkl
+│   ├── qt_model_0.5小時最高價_pct.pkl
+│   ├── qt_model_1.5小時高價_pct.pkl
+│   └── training_results_*.png
 │
-├── train_qt_xgboost.py             # 訓練腳本（訓練4個模型）
-├── predict_new_stocks.py           # 預測腳本（使用4個模型）
-├── config.py                       # 配置參數
+├── documents/                      # Analysis and design documents
 │
-├── 快速訓練.bat                     # 一鍵訓練工具
-├── 快速預測.bat                     # 一鍵預測工具
-├── 快速預測_含可信度.bat            # 一鍵預測工具（含可信度計算）
+├── train_qt_xgboost.py             # Training script
+├── predict_new_stocks.py           # Prediction script
+├── 可信度實作範例.py                # Confidence scoring example
 │
-├── 可信度實作範例.py                # 可信度計算範例程式
+├── 快速訓練.bat                     # One-click train (Windows)
+├── 快速預測.bat                     # One-click predict (Windows)
+├── 快速預測_含可信度.bat            # One-click predict with confidence (Windows)
 │
-├── requirements.txt                # Python 依賴
-├── .gitignore                      # Git 配置
-│
-└── 📚 說明文件/
-    ├── README.md                   # 本文件
-    ├── 訓練概念說明.md              # 機器學習概念
-    ├── 預測可信度分析.md            # 可信度計算說明
-    ├── 特徵工程實戰指南.md          # 特徵數量與資料量關係
-    ├── 特徵數量與資料量關係分析.md  # 理論分析
-    └── 專案結構.md                  # 專案結構說明
+├── requirements.txt
+└── .gitignore
 ```
 
 ---
 
-## 📊 資料格式
+## Notes and Limitations
 
-### 欄位命名規則
-
-在 Excel 中使用特殊標記來標示欄位用途：
-
-- **`*` 開頭** = 忽略的欄位（如 `*昨日收盤價`、`*備註`）
-- **`#` 開頭** = 目標標籤（如 `#開盤 (%)`）
-- **無標記** = 特徵欄位（如 `5日高價距離 (%)`）
-
-### 訓練資料（QT Training Data.xlsx）
-
-**基本特徵（12個）：**
-- 開盤日期、公司代碼、產業
-- 5日/1個月/6個月 高價距離 (%)
-- 5日/1個月/6個月 低價距離 (%)
-- 盤前 (%)
-- 觸發類型、消息情緒分數
-- EPS Surprise (%)、Revenue Surprise (%)、展望 (Guidance)
-
-**趨勢特徵（1個序列 → 15個斜率特徵）：**
-- `120天收盤價序列` - 格式：`[100.5, 102.3, 101.8, ...]`
-  - 自動提取 15 個趨勢斜率特徵（5天/20天/120天，各5段）
-
-**目標標籤（4個，帶 `#`）：**
-- `#開盤 (%)` - 開盤漲幅
-- `#10分鐘低價 (%)` - 開盤後10分鐘內最低價
-- `#0.5小時最高價 (%)` - 開盤後0.5小時內最高價
-- `#1.5小時高價 (%)` - 開盤後1.5小時內最高價
-
-### 預測資料（Stock TBP.xlsx）
-
-只需要**特徵欄位**，不需要目標欄位（`#` 開頭的）。
-
-**重要**：必須包含 `120天收盤價序列` 欄位才能獲得準確預測。
+- **Data not included**: Excel files are excluded from the repository. You must supply your own data collected from the QT data collecting project.
+- **Model accuracy**: Performance depends heavily on training data size and quality. With ~200–300 samples, expect test MAE of roughly 3–5% and R² around 0.70–0.75.
+- **Not financial advice**: Predictions are for research and reference only. Always combine with your own analysis before making trading decisions.
+- **Confidence scores with small datasets**: Confidence scores tend to be lower when training data is under 100 samples, as Bootstrap estimates become less stable.
+- **Sequence length filtering**: Stocks with fewer than 120 days of closing price history are automatically excluded from training.
 
 ---
 
-## 🎯 使用方式
+## Related Documents
 
-### 訓練模型
+The `documents/` folder contains detailed analysis notes (in Traditional Chinese):
 
-**使用批次檔（推薦）：**
-```
-雙擊 快速訓練.bat
-```
-
-**使用命令列：**
-```bash
-python train_qt_xgboost.py
-```
-
-**輸出：**
-- 4 個模型檔案：`models/qt_model_*.pkl`
-- 4 張訓練圖表：`models/training_results_*.png`
-- 控制台顯示訓練過程和評估結果
-
-### 預測新股票
-
-**使用批次檔（推薦）：**
-```
-1. 在 Excel 更新 data/Stock TBP.xlsx
-2. 雙擊 快速預測.bat（基本預測，快速）
-   或 快速預測_含可信度.bat（含可信度，較慢）
-3. 自動開啟結果檔案
-```
-
-**使用命令列：**
-```bash
-# 基本預測（快速）
-python predict_new_stocks.py --input "data/Stock TBP.xlsx"
-
-# 預測並計算可信度（較慢，約 2-5 分鐘）
-python predict_new_stocks.py --input "data/Stock TBP.xlsx" --confidence
-```
-
-**輸出：**
-- 控制台顯示 4 個目標的預測結果
-- `data/new_predictions.csv` - 詳細結果檔案
-- 如果啟用可信度，會額外包含：
-  - 可信度分數（0-1）
-  - 可信度等級（高/中/低）
-  - 95% 預測區間（上界、下界）
-
-### 批量預測
-
-在 Excel 中新增多行資料，執行相同命令即可一次預測多支股票。
+| File | Description |
+|------|-------------|
+| `訓練流程說明.md` | Training pipeline explanation |
+| `市場反應速度特徵分析.md` | Analysis of missing features affecting reaction speed |
+| `交易金額時間窗口分析.md` | Why 20-day average trading volume was chosen |
+| `特徵工程實戰指南.md` | Feature engineering practical guide |
+| `特徵數量與資料量關係分析.md` | Feature count vs. data size analysis |
+| `訓練概念說明.md` | ML concepts overview |
+| `預測可信度分析.md` | Confidence scoring methodology |
 
 ---
 
-## 📈 解讀結果
-
-### 預測值意義
-
-系統會預測 4 個目標值，並可選擇性計算可信度：
-
-```
-預測_#開盤 (%) = 2.46
-預測_#10分鐘低價 (%) = -1.87
-預測_#0.5小時最高價 (%) = 0.31
-預測_#1.5小時高價 (%) = 4.52
-
-可信度_#開盤 (%) = 0.65
-可信度等級_#開盤 (%) = 中
-預測下界_#開盤 (%) = -0.82
-預測上界_#開盤 (%) = 5.74
-```
-
-**解讀：**
-- 開盤預期上漲 2.46%
-- 開盤後10分鐘可能回落至 -1.87%
-- 0.5小時內最高可能到 0.31%
-- 1.5小時內最高可能到 4.52%
-- 可信度為中等（0.65），95% 機率落在 [-0.82%, 5.74%] 區間
-
-### 可信度解讀
-
-| 可信度等級 | 分數範圍 | 建議 |
-|-----------|---------|------|
-| 高 | > 0.7 | 可以信賴預測結果，建議採取行動 |
-| 中 | 0.4-0.7 | 謹慎評估，建議結合其他分析方法 |
-| 低 | < 0.4 | 預測不確定性高，建議觀望 |
-
-**可信度低的可能原因：**
-- 新資料與訓練資料差異較大（相似度低）
-- 預測區間過寬（不確定性高）
-- 模型預測不一致（Bootstrap 結果分散）
-- 訓練資料量不足（< 100 筆）
-
-### 當沖策略建議
-
-| 預測值組合 | 可信度 | 策略建議 |
-|-----------|--------|---------|
-| 開盤 > +5%, 高價 > +10% | 高 | 重點關注，開盤做多 |
-| 開盤 > +3%, 低價 < -2% | 高/中 | 等待回落後進場 |
-| 開盤 > +5%, 高價 > +10% | 低 | 謹慎評估，可能不可靠 |
-| 開盤 < 0%, 高價 < +2% | 任何 | 避免做多 |
-| 所有值 < 0% | 任何 | 考慮做空或觀望 |
-
-**重要提醒**：
-- 可信度高的預測更值得參考
-- 可信度低時，即使預測值很好，也要謹慎
-- 建議結合技術分析、基本面分析等其他方法
-
----
-
-## 🎓 技術說明
-
-### 模型架構
-
-- **演算法**：XGBoost（梯度提升樹）
-- **模型數量**：4 個獨立模型（每個目標一個）
-- **特徵數量**：40 個
-  - 12 個基本特徵
-  - 15 個趨勢斜率特徵
-  - 13 個產業 One-Hot 特徵
-
-### 趨勢斜率特徵
-
-從 `120天收盤價序列` 提取 15 個斜率特徵：
-
-- **120天趨勢**：切5段，每段約24天
-- **20天趨勢**：切5段，每段約4天
-- **5天趨勢**：切5段，每段約1天
-
-使用標準化價格計算線性回歸斜率，單位為 %/天。
-
-詳細說明請參考 `斜率計算方式說明.md`
-
-### 觸發類型處理
-
-- **類型 1（財報為主）**：財報欄位用中位數填補缺失值
-- **類型 2（消息為主）**：財報欄位填 0（因為無財報數據）
-- **類型 3（財報+消息）**：財報欄位用中位數填補缺失值
-
-詳細說明請參考 `觸發類型處理說明.md`
-
-### 訓練參數
-
-```python
-n_estimators = 100      # 樹的數量
-max_depth = 5           # 樹的最大深度
-learning_rate = 0.1     # 學習率
-test_size = 0.2         # 測試集比例（20%）
-```
-
----
-
-## ⚠️ 重要提醒
-
-### 模型限制
-
-```
-✓ 目前訓練資料：31 筆
-✓ 預測準確度有限（資料量不足）
-✓ 可信度普遍偏低（< 100 筆資料）
-✓ 僅供參考，不是投資建議
-✓ 需要結合其他分析方法
-```
-
-### 如何提升準確度和可信度
-
-1. **收集更多資料**（建議：100+ 筆）
-2. **確保資料品質**（完整的120天收盤價序列）
-3. **重新訓練模型**：`python train_qt_xgboost.py`
-4. **持續驗證**：記錄預測結果，與實際比較
-5. **使用可信度篩選**：只採用高可信度的預測
-
----
-
-## 🛠️ 常見問題
-
-### Q: 找不到模型檔案？
-**A:** 先執行 `快速訓練.bat` 或 `python train_qt_xgboost.py` 訓練模型
-
-### Q: 缺少 120天收盤價序列？
-**A:** 在 Excel 中加入此欄位，格式為 `[100.5, 102.3, ...]`，否則趨勢特徵將全部為 0
-
-### Q: 序列格式錯誤？
-**A:** 確保格式為 `[值1, 值2, 值3, ...]`，用逗號分隔，共120個值
-
-### Q: 預測結果不準？
-**A:** 正常，因為訓練資料太少（31筆）。建議收集 100+ 筆資料後重新訓練
-
-### Q: 可信度都很低？
-**A:** 正常，因為訓練資料量不足（< 100筆）。資料量增加後可信度會提升
-
-### Q: 要不要使用可信度計算？
-**A:** 
-- 資料量 < 100 筆：可以不用，因為可信度都會偏低
-- 資料量 > 100 筆：建議使用，可以篩選出更可靠的預測
-- 可信度計算需要 2-5 分鐘，視資料量而定
-
-### Q: 如何預測多支股票？
-**A:** 在 Excel 中新增多行，執行相同命令即可
-
-### Q: 觸發類型是什麼？
-**A:** 
-- 1 = 財報為主
-- 2 = 消息為主（無財報數據）
-- 3 = 財報+消息
-
----
-
-## 📝 快速參考
-
-### 最常用命令
-
-```bash
-# 預測（批次檔）
-雙擊 快速預測.bat
-
-# 預測含可信度（批次檔）
-雙擊 快速預測_含可信度.bat
-
-# 訓練（命令列）
-python train_qt_xgboost.py
-
-# 預測（命令列）
-python predict_new_stocks.py --input "data/Stock TBP.xlsx"
-
-# 預測含可信度（命令列）
-python predict_new_stocks.py --input "data/Stock TBP.xlsx" --confidence
-
-# 查看結果
-start data\new_predictions.csv
-```
-
-### 檔案位置
-
-```
-訓練資料: data/QT Training Data.xlsx
-預測資料: data/Stock TBP.xlsx
-預測結果: data/new_predictions.csv
-模型檔案: models/qt_model_*.pkl
-訓練圖表: models/training_results_*.png
-```
-
----
-
-## 📚 相關文件
-
-- **訓練概念說明.md** - 機器學習基礎概念
-- **預測可信度分析.md** - 可信度計算原理與實作
-- **特徵工程實戰指南.md** - 特徵數量與資料量關係實戰
-- **特徵數量與資料量關係分析.md** - 理論分析
-- **專案結構.md** - 專案結構說明
-- **可信度實作範例.py** - 可信度計算範例程式
-
----
-
-## 🔧 技術棧
-
-- **Python 3.8+**
-- **XGBoost** - 梯度提升樹模型
-- **pandas** - 資料處理
-- **numpy** - 數值計算
-- **scikit-learn** - 機器學習工具
-- **matplotlib** - 視覺化
-- **openpyxl** - Excel 讀寫
-
----
-
-## 📄 授權
+## License
 
 MIT License
-
----
-
-**祝你交易順利！** 🚀
